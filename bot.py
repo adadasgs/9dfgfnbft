@@ -199,27 +199,24 @@ async def topics_command(message: Message):
 @dp.message(Command("sources"))
 async def sources_command(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔎 ChatCrawler — публичный поиск", url="https://app.chatcrawler.app/")],
-        [InlineKeyboardButton(text="🎁 Gift Explore — поиск подарков", url="https://t.me/giftexplorebot")],
+        [InlineKeyboardButton(text="🎁 Gifts.wtf — каталог подарков", url="https://gifts.wtf/")],
+        [InlineKeyboardButton(text="🔎 GiftChecker — резервный сайт", url="https://giftcheckertg.com/")],
     ])
     await message.answer(
         "<b>Проверка источников</b>\n\n"
-        "• GiftChecker — проверяется публичная страница рынка пользовательских объявлений.\n"
-        "• Остальные сайты будут включаться только после подтверждения, что они открыто показывают username продавца.\n\n"
-        "Поиск по Telegram-каналам отключён. Неподтверждённые аккаунты не публикуются.",
+        "• Gifts.wtf добавлен как источник открытых рыночных данных. Это proxy seller: его кошелёк или контакт не считается username реального владельца.\n"
+        "• В группу попадёт только объявление, где страница явно указывает Telegram username продавца.\n"
+        "• Личные Telegram API, каналы и неподтверждённые аккаунты не используются.",
         reply_markup=keyboard,
     )
 
 
 @dp.message(Command("status"))
 async def status_command(message: Message):
-    if scanner is not None and scanner.mtproto is not None:
+    if scanner is not None:
         await message.answer(
-            "🟢 Сканер профилей подключён. Проверяет публичные перепродажи подарков за Stars; каналы и TON исключены."
-        )
-    elif scanner is not None:
-        await message.answer(
-            "🟡 Работает только резервная проверка сайтов. Для нового парсинга профилей добавь в Render переменные API_ID, API_HASH и SESSION_STRING."
+            "🟡 Включён поиск по открытым сайтам без личного Telegram API. "
+            "Gifts.wtf проверяется как рыночный источник, но username публикуется только при явном подтверждении продавца на странице."
         )
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
