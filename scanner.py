@@ -245,9 +245,9 @@ class ProfileScanner:
 
         seller_re = re.compile(
             r"(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца|написать продавцу)"
-            r"\\s*[:：=—-]?\\s*(?:https?://)?t\\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
+            r"\s*[:：=—-]?\\s*(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
             r"|(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца)"
-            r"\\s*[:：=—-]?\\s*@([A-Za-z][A-Za-z0-9_]{4,31})",
+            r"\s*[:：=—-]?\\s*@([A-Za-z][A-Za-z0-9_]{4,31})",
             re.I,
         )
         gift_re = re.compile(r"(gift|gifts|подарок|подарки|collectible|nft)", re.I)
