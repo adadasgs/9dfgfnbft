@@ -88,7 +88,8 @@ def profile_keyboard(user_id, username, listing_url=None):
 async def publish_profile(user, gifts):
     user_id = int(user.id)
     username = getattr(user, "username", None)
-    price = getattr(user, "price_ton", None)  # legacy field; scanner stores GRAM here
+    price = getattr(user, "price_ton", None)  # legacy field; may contain Telegram Stars
+    currency = getattr(user, "price_currency", "GRAM")
     source = getattr(user, "source", None)
     # Distribute every detected gift listing across the five forum topics.
     # The listing key is stable, so retries go to the same topic.
@@ -116,7 +117,7 @@ async def publish_profile(user, gifts):
         "nft_address": None,
         "listing_url": getattr(user, "listing_url", None),
         "price": price,
-        "price_currency": "GRAM" if price is not None else None,
+        "price_currency": currency if price is not None else None,
         "gifts_count": len(gifts),
         "gift_summary": summary,
         "category": category,
@@ -127,7 +128,7 @@ async def publish_profile(user, gifts):
         return False
 
     identity = f'🔗 Профиль продавца: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>'
-    price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
+    price_text = f"💎 Цена: <b>{price:g} {escape(currency)}</b>" if price is not None else "💎 Цена: неизвестна"
     reputation = "⭐ Рейтинг: открытый источник не предоставляет\n📝 Отзывы: открытый источник не предоставляет"
     text = (
         "🎁 <b>Найден продавец Telegram-подарка</b>\n\n"
@@ -147,7 +148,7 @@ async def publish_profile(user, gifts):
         kwargs["message_thread_id"] = topics[category]
     sent = await bot.send_message(**kwargs)
     await db.attach_message(user_id, DESTINATION_CHAT_ID, sent.message_id)
-    await db.log_scan(user_id, username, f"Опубликовано объявление; цена {price} GRAM")
+    await db.log_scan(user_id, username, f"Опубликовано объявление; цена {price} {currency}")
     return True
 
 
