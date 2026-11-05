@@ -2,9 +2,12 @@ import asyncio
 import logging
 import os
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
+from html import escape
 import database as db
 from scanner import ProfileScanner
 
@@ -26,7 +29,7 @@ CATEGORIES = [
     ("over60", "60+ GRAM"),
 ]
 
-bot = Bot(BOT_TOKEN)
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 scanner = None
 
@@ -48,27 +51,47 @@ def gift_name(gift):
 
 async def publish_profile(user, gifts):
     username = getattr(user, "username", None)
-    display_name = " ".join(x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x) or "Telegram user"
+    user_id = int(user.id)
+    display_name = " ".join(
+        x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x
+    ) or "Telegram user"
+    safe_name = escape(display_name)
+    safe_username = escape(username) if username else None
     profile_url = f"https://t.me/{username}" if username else None
-    summary = "\n".join(f"• {gift_name(g)}" for g in gifts[:20])
+    summary = "\\n".join(f"• {escape(gift_name(g))}" for g in gifts[:20])
+
     await db.save_profile({
-        "user_id": user.id, "username": username, "display_name": display_name,
+        "user_id": user_id, "username": username, "display_name": display_name,
         "profile_url": profile_url, "gifts_count": len(gifts),
         "gift_summary": summary, "category": "unpriced"
     })
-    existing = await db.get_profile(user.id)
+    existing = await db.get_profile(user_id)
     # Publish only once; updates are reflected in the log/database, avoiding duplicate group posts.
     if existing and existing.get("message_id"):
+        await db.log_scan(user_id, username, f"Найдено NFT-подарков: {len(gifts)}")
         return
+
+    if profile_url:
+        profile_line = f'👤 Продавец: <a href="{profile_url}">{safe_name}</a>'
+    else:
+        profile_line = f"👤 Продавец: {safe_name}"
+    username_line = f"🔗 Username: @{safe_username}" if safe_username else "🔗 Username: не указан"
     text = (
-        "🎁 <b>Найдены NFT-подарки в профиле</b>\n\n"
-        f"👤 Профиль: <a href=\"{profile_url}\">{display_name}</a>\n" if profile_url else
-        "🎁 <b>Найдены NFT-подарки в профиле</b>\n\n" + f"👤 {display_name}\n"
+        "🎁 <b>Найдены NFT-подарки в профиле</b>\\n\\n"
+        f"{profile_line}\\n"
+        f"{username_line}\\n"
+        f"🆔 Telegram ID: <code>{user_id}</code>\\n"
+        f"🧩 NFT-подарков: <b>{len(gifts)}</b>\\n\\n"
+        f"<b>Подарки:</b>\\n{summary}\\n\\n"
+        "💎 Оценка цены: пока не рассчитана"
     )
-    text += f"🧩 NFT-подарков: <b>{len(gifts)}</b>\n\n<b>Подарки:</b>\n{summary}\n\n"
-    text += "💎 Оценка цены: пока не рассчитана"
-    sent = await bot.send_message(DESTINATION_CHAT_ID, text, reply_markup=profile_keyboard(user.id, username), disable_web_page_preview=True)
-    await db.attach_message(user.id, DESTINATION_CHAT_ID, sent.message_id)
+    sent = await bot.send_message(
+        DESTINATION_CHAT_ID, text,
+        reply_markup=profile_keyboard(user_id, username),
+        disable_web_page_preview=True
+    )
+    await db.attach_message(user_id, DESTINATION_CHAT_ID, sent.message_id)
+    await db.log_scan(user_id, username, f"Опубликовано; NFT-подарков: {len(gifts)}")
 
 
 @dp.message(CommandStart())
