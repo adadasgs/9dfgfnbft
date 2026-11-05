@@ -213,9 +213,13 @@ async def sources_command(message: Message):
 
 @dp.message(Command("status"))
 async def status_command(message: Message):
-    if scanner is not None:
+    if scanner is not None and scanner.mtproto is not None:
         await message.answer(
-            "🟢 Сканер активен. Проверяет сайты объявлений и публикует только подтверждённые username продавцов."
+            "🟢 Сканер профилей подключён. Проверяет публичные перепродажи подарков за Stars; каналы и TON исключены."
+        )
+    elif scanner is not None:
+        await message.answer(
+            "🟡 Работает только резервная проверка сайтов. Для нового парсинга профилей добавь в Render переменные API_ID, API_HASH и SESSION_STRING."
         )
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
