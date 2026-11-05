@@ -172,7 +172,7 @@ class ProfileScanner:
         # Require an explicit seller/contact cue in Russian, English or Chinese.
         contact_pattern = re.compile(
             r"(?:продавец|контакт|пишите|писать|связь|seller|contact|"
-            r"message me|dm me|contact me|\\bdm\\b|по вопросам|обращаться|"
+            r"message me|dm me|contact me|\bdm\b|по вопросам|обращаться|"
             r"для покупки|вопросы|联系我|卖家|联系|私聊|找我)"
             r"\s*(?:мне\s*)?(?:[:：=—-]\s*)?"
             r"(?:в\s+(?:личку|лс|личные сообщения)\s*)?"
@@ -245,9 +245,9 @@ class ProfileScanner:
 
         seller_re = re.compile(
             r"(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца|написать продавцу)"
-            r"\s*[:：=—-]?\\s*(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
+            r"\s*[:：=—-]?\s*(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
             r"|(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца)"
-            r"\s*[:：=—-]?\\s*@([A-Za-z][A-Za-z0-9_]{4,31})",
+            r"\s*[:：=—-]?\s*@([A-Za-z][A-Za-z0-9_]{4,31})",
             re.I,
         )
         gift_re = re.compile(r"(gift|gifts|подарок|подарки|collectible|nft)", re.I)
