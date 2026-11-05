@@ -169,9 +169,9 @@ class ProfileScanner:
         for anchor in anchors:
             label = anchor.get("text", "")
             href = anchor.get("href", "")
-            if label.startswith("@"):
-                candidates.update(USERNAME_RE.findall(label))
-            elif re.search(r"(написать|продав|контакт|связ|telegram|телеграм)", label, re.I):
+            # Only treat a link as a seller contact when its visible label is
+            # an explicit contact action; ordinary gift/profile links are ignored.
+            if re.search(r"(написать продавцу|связаться|контакт продавца|seller contact)", label, re.I):
                 candidates.update(TME_RE.findall(href))
 
         candidates = {
