@@ -35,6 +35,18 @@ scanner = None
 scanner_error = "Сканер ещё не запускался"
 
 
+async def ensure_forum_topics():
+    saved = await db.get_forum_topics()
+    created = []
+    for key, title in CATEGORIES:
+        if key not in saved:
+            topic = await bot.create_forum_topic(chat_id=DESTINATION_CHAT_ID, name=title)
+            await db.save_forum_topic(key, topic.message_thread_id)
+            created.append(title)
+            log.info("Created forum topic %s (thread_id=%s)", title, topic.message_thread_id)
+    return created
+
+
 def profile_keyboard(user_id: int, username: str | None):
     contact_url = f"https://t.me/{username}" if username else None
     rows = [[InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}"),
