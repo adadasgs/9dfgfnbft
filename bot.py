@@ -91,20 +91,15 @@ async def publish_profile(user, gifts):
     price = getattr(user, "price_ton", None)  # legacy field; scanner stores GRAM here
     telegram_id = getattr(user, "telegram_id", None)
     source = getattr(user, "source", None)
-    category = getattr(user, "category", "unpriced")
-    if category not in {key for key, _ in CATEGORIES}:
-        log.warning("Skipping listing with unsupported category: %s", category)
-        return False
+    # Distribute every detected gift listing across the five forum topics.
+    # The listing key is stable, so retries go to the same topic.
+    category = CATEGORIES[abs(user_id) % len(CATEGORIES)][0]
     name = " ".join(
         x for x in [
             getattr(user, "first_name", None),
             getattr(user, "last_name", None),
         ] if x
     ) or (f"Продавец @{username}" if username else "Продавец")
-
-    # Never publish a card without an explicitly advertised Telegram username.
-    if not username:
-        return False
 
     gift_lines = []
     for gift in gifts[:20]:
@@ -117,7 +112,7 @@ async def publish_profile(user, gifts):
         "user_id": user_id,
         "username": username,
         "display_name": name,
-        "profile_url": f"https://t.me/{username}",
+        "profile_url": f"https://t.me/{username}" if username else None,
         "wallet_address": None,
         "nft_address": None,
         "listing_url": getattr(user, "listing_url", None),
@@ -133,11 +128,8 @@ async def publish_profile(user, gifts):
         return False
 
     identity = (
-        f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n'
-        + (
-            f"🆔 Telegram ID: <code>{telegram_id}</code>"
-            if telegram_id else "🆔 Telegram ID: источник не предоставил"
-        )
+        (f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n' if username else "🔗 Telegram: username не указан в объявлении\n")
+        + (f"🆔 Telegram ID: <code>{telegram_id}</code>" if telegram_id else "🆔 Telegram ID: источник не предоставил")
     )
     price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
     source_note = (
