@@ -128,17 +128,17 @@ async def publish_profile(user, gifts):
         return False
 
     identity = (
-        f'🔗 Профиль продавца: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\\n'
+        f'🔗 Профиль продавца: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n'
         + (f"🆔 Telegram ID: <code>{telegram_id}</code>" if telegram_id else "🆔 Telegram ID: источник не предоставил")
     )
     price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
-    reputation = "⭐ Рейтинг: открытый источник не предоставляет\\n📝 Отзывы: открытый источник не предоставляет"
+    reputation = "⭐ Рейтинг: открытый источник не предоставляет\n📝 Отзывы: открытый источник не предоставляет"
     text = (
-        "🎁 <b>Найден продавец Telegram-подарка</b>\\n\\n"
-        f"👤 Продавец: {escape(name)}\\n{identity}\\n"
-        f"{reputation}\\n"
-        f"🧩 Подарков в объявлении: <b>{len(gifts)}</b>\\n{price_text}\\n\\n"
-        f"<b>Лот:</b>\\n{summary}"
+        "🎁 <b>Найден продавец Telegram-подарка</b>\n\n"
+        f"👤 Продавец: {escape(name)}\n{identity}\n"
+        f"{reputation}\n"
+        f"🧩 Подарков в объявлении: <b>{len(gifts)}</b>\n{price_text}\n\n"
+        f"<b>Лот:</b>\n{summary}"
     )
     topics = await db.get_forum_topics()
     kwargs = {
