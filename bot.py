@@ -192,7 +192,7 @@ async def topics_command(message: Message):
 @dp.message(Command("status"))
 async def status_command(message: Message):
     if scanner is not None:
-        await message.answer(f"🟢 TON-сканер подключён. Интервал: {SCAN_INTERVAL} сек.")
+        await message.answer(f"🟢 Сканер публичных Telegram-объявлений подключён. Интервал: {SCAN_INTERVAL} сек.")
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
 
