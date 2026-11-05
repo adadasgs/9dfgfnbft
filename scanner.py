@@ -26,7 +26,7 @@ DEFAULT_CHANNELS = (
     "DuckLodge,nonstopiiiikk,durovgoyda,mr_tony,digest,roxtalk,zorgannft,"
     "dadyacrypto,nft13onton,directorpodarkov,"
     "GiftTradeee,TonnelGift,mrktnotification,giftsmarket_starsgram,"
-    "GiftPawn,nft_gifts_chat,vseznayka_otc"
+    "GiftPawn,nft_gifts_chat,vseznayka_otc,mutant_gifts,mutantgifts_chat,peektg"
 )
 CHANNELS = [
     x.strip().lstrip("@")
@@ -240,22 +240,59 @@ class ProfileScanner:
         return -(int(digest, 16) or 1)
 
     async def scan_once(self):
-        """Only verified website feeds may publish seller profiles.
+        """Scan public gift-sale feeds and public Telegram previews.
 
-        Channel scraping is deliberately disabled: it produced channel-post
-        noise, not a verified seller directory. ChatCrawler documents single
-        query search, not bulk profile export; marketplace feeds that mask
-        seller identity are not treated as seller sources.
+        Emit only when the post explicitly labels a Telegram contact as seller.
+        Random mentions, channel names and bot accounts are rejected.
         """
         self.last_stats = {
-            "website_sources_checked": 0,
-            "website_sources_unavailable": 0,
-            "profiles_with_verified_username": 0,
+            "public_sources_checked": 0,
+            "public_sources_unavailable": 0,
             "channels_scanned": 0,
-            "reason": (
-                "No verified free bulk website feed currently exposes both "
-                "gift listing and seller Telegram username"
-            ),
+            "posts_checked": 0,
+            "gift_posts": 0,
+            "posts_with_contact": 0,
+            "profiles_with_verified_username": 0,
         }
-        if False:
-            yield None, None
+        seen = set()
+        for channel in CHANNELS:
+            self.last_stats["public_sources_checked"] += 1
+            try:
+                page = await self._get(f"https://t.me/s/{channel}")
+                if not page:
+                    self.last_stats["public_sources_unavailable"] += 1
+                    continue
+                self.last_stats["channels_scanned"] += 1
+                for post_channel, post_id, text, anchors in self._blocks(page):
+                    self.last_stats["posts_checked"] += 1
+                    if not GIFT_WORDS.search(text):
+                        continue
+                    self.last_stats["gift_posts"] += 1
+                    username = self._username(text, anchors, post_channel)
+                    if not username:
+                        continue
+                    self.last_stats["posts_with_contact"] += 1
+                    key = (post_channel.lower(), post_id, username.lower())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    price = self._price(text)
+                    listing_url = f"https://t.me/{post_channel}/{post_id}"
+                    user = SimpleNamespace(
+                        id=self._internal_id(post_channel, post_id),
+                        username=username,
+                        first_name=None,
+                        last_name=None,
+                        telegram_id=None,
+                        price_ton=price,
+                        source=f"Telegram public post: @{post_channel}",
+                        listing_url=listing_url,
+                    )
+                    gift = SimpleNamespace(title=text[:180] or "Telegram gift listing", url=listing_url)
+                    self.last_stats["profiles_with_verified_username"] += 1
+                    yield user, [gift]
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_stats["public_sources_unavailable"] += 1
+                log.warning("Source @%s scan failed: %s", channel, exc)
