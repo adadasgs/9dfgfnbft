@@ -40,6 +40,18 @@ WEB_SEARCH_QUERIES = (
     'site:peek.tg Telegram gift seller',
     'site:marketapp.ws Telegram gift seller',
     'site:giftswatchdata.com Telegram gift seller',
+    '"Telegram NFT gifts" "мой профиль" продавец',
+    '"продаю NFT подарки Telegram" "@"',
+    '"куплю продам Telegram gifts" seller contact',
+    '"Telegram gift seller" "t.me/" -site:t.me',
+    '"Telegram collectible seller" "telegram.me" -site:t.me',
+    '"NFT gift for sale" "Telegram username" seller',
+    '"Telegram gifts" "seller profile" marketplace',
+    'site:funpay.com Telegram NFT подарок продавец',
+    'site:playerok.com Telegram NFT подарок',
+    'site:plati.market Telegram NFT gift seller',
+    'site:ggsel.net Telegram gift seller',
+    'site:lolz.live Telegram NFT подарок',
 )
 SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "50")), 100))
 REQUEST_INTERVAL = 1.1
@@ -264,6 +276,8 @@ class ProfileScanner:
             "fragment.com", "getgems.io", "gifts.wtf", "tggifts.com",
             "giftcheckertg.com", "mrkt.com", "tonnel.network", "browse.tg",
             "giftswatchdata.com", "marketapp.ws", "peek.tg",
+            "funpay.com", "playerok.com", "plati.market", "ggsel.net",
+            "lolz.live", "funpay.ru",
         )
         self.last_stats.update({
             "search_queries": 0, "search_results": 0, "gift_results": 0,
