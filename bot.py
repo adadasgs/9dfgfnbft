@@ -21,13 +21,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DESTINATION_CHAT_ID = int(os.getenv("DESTINATION_CHAT_ID", "0"))
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "900"))
 
-# Price categories are deliberately not assigned until a trustworthy valuation exists.
 CATEGORIES = [
-    ("under5", "До 5 GRAM"),
-    ("5_15", "5–15 GRAM"),
-    ("15_27_5", "15–27.5 GRAM"),
-    ("27_5_60", "27.5–60 GRAM"),
-    ("over60", "60+ GRAM"),
+    ("under5", "До 5 TON"),
+    ("5_15", "5–15 TON"),
+    ("15_27_5", "15–27.5 TON"),
+    ("27_5_60", "27.5–60 TON"),
+    ("over60", "60+ TON"),
 ]
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -38,17 +37,22 @@ scanner_error = "Сканер ещё не запускался"
 
 async def ensure_forum_topics():
     saved = await db.get_forum_topics()
-    created = []
     for key, title in CATEGORIES:
         if key not in saved:
             topic = await bot.create_forum_topic(chat_id=DESTINATION_CHAT_ID, name=title)
             await db.save_forum_topic(key, topic.message_thread_id)
-            created.append(title)
-            log.info("Created forum topic %s (thread_id=%s)", title, topic.message_thread_id)
-    return created
+        else:
+            try:
+                await bot.edit_forum_topic(
+                    chat_id=DESTINATION_CHAT_ID,
+                    message_thread_id=saved[key],
+                    name=title,
+                )
+            except Exception:
+                log.exception("Could not rename topic %s", title)
 
 
-def profile_keyboard(user_id: int, username: str | None):
+def profile_keyboard(user_id, username):
     rows = [[
         InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}"),
         InlineKeyboardButton(text="📋 Открыть лог", callback_data=f"log:{user_id}"),
@@ -60,127 +64,133 @@ def profile_keyboard(user_id: int, username: str | None):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def gift_name(gift):
-    return getattr(gift, "title", None) or getattr(gift, "slug", None) or "Collectible Gift"
-
-
 async def publish_profile(user, gifts):
-    username = getattr(user, "username", None)
     user_id = int(user.id)
-    display_name = " ".join(
-        x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x
-    ) or "Telegram user"
-    profile_url = f"https://t.me/{username}" if username else None
-    summary = "\n".join(f"• {escape(gift_name(g))}" for g in gifts[:20])
+    username = getattr(user, "username", None)
+    wallet = getattr(user, "wallet_address", None)
+    price = getattr(user, "price_ton", None)
+    category = getattr(user, "category", "unpriced")
+    name = " ".join(x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x)
+    name = name or "TON wallet"
+
+    gift_lines = []
+    for gift in gifts[:20]:
+        title = escape(getattr(gift, "title", "TON NFT"))
+        address = getattr(gift, "address", None)
+        url = getattr(gift, "url", None)
+        gift_lines.append(f'• <a href="{escape(url)}">{title}</a>' if url else f"• {title}")
+        if address:
+            gift_lines.append(f"  <code>{escape(address)}</code>")
+    summary = "\n".join(gift_lines)
 
     await db.save_profile({
         "user_id": user_id,
         "username": username,
-        "display_name": display_name,
-        "profile_url": profile_url,
+        "display_name": name,
+        "profile_url": f"https://t.me/{username}" if username else None,
+        "wallet_address": wallet,
+        "nft_address": getattr(user, "nft_address", None),
+        "listing_url": getattr(user, "listing_url", None),
+        "price": price,
+        "price_currency": "TON" if price is not None else None,
         "gifts_count": len(gifts),
         "gift_summary": summary,
-        "category": "unpriced",
+        "category": category,
     })
-    existing = await db.get_profile(user_id)
-    if existing and existing.get("message_id"):
-        await db.log_scan(user_id, username, f"Повторная проверка: NFT-подарков {len(gifts)}")
+    old = await db.get_profile(user_id)
+    if old and old.get("message_id"):
+        await db.log_scan(user_id, username, "Повторная проверка NFT-листинга")
         return
 
-    safe_name = escape(display_name)
-    username_line = f"🔗 Username: @{escape(username)}" if username else "🔗 Username: не указан"
-    profile_line = f'👤 Продавец: <a href="{profile_url}">{safe_name}</a>' if profile_url else f"👤 Продавец: {safe_name}"
-    card_text = (
-        "🎁 <b>Найдены NFT-подарки в профиле</b>\n\n"
-        f"{profile_line}\n"
-        f"{username_line}\n"
-        f"🆔 Telegram ID: <code>{user_id}</code>\n"
-        f"🧩 NFT-подарков: <b>{len(gifts)}</b>\n\n"
-        f"<b>Подарки:</b>\n{summary}\n\n"
-        "💎 Оценка цены: пока не рассчитана"
+    if wallet:
+        seller = f"👛 Кошелёк владельца: <code>{escape(wallet)}</code>"
+        identity = "🔗 Telegram username: не найден в публичных данных\n🆔 Telegram ID: недоступен из TON-адреса"
+        heading = "💎 <b>Найден NFT-листинг в сети TON</b>"
+    else:
+        seller = f"👤 Продавец: {escape(name)}"
+        identity = f"🔗 Username: @{escape(username) if username else 'не указан'}\n🆔 Telegram ID: <code>{user_id}</code>"
+        heading = "🎁 <b>Найдены NFT-подарки</b>"
+
+    price_text = f"💎 Цена: <b>{price:.4f} TON</b>" if price is not None else "💎 Цена: неизвестна"
+    text = (
+        f"{heading}\n\n{seller}\n{identity}\n"
+        f"🧩 NFT: <b>{len(gifts)}</b>\n{price_text}\n\n"
+        f"<b>Объект:</b>\n{summary}\n\n"
+        "ℹ️ Адрес кошелька не подтверждает личность владельца в Telegram."
     )
-    sent = await bot.send_message(
-        DESTINATION_CHAT_ID,
-        card_text,
-        reply_markup=profile_keyboard(user_id, username),
-        disable_web_page_preview=True,
-    )
+    topics = await db.get_forum_topics()
+    kwargs = {
+        "chat_id": DESTINATION_CHAT_ID,
+        "text": text,
+        "reply_markup": profile_keyboard(user_id, username),
+        "disable_web_page_preview": True,
+    }
+    if topics.get(category):
+        kwargs["message_thread_id"] = topics[category]
+    sent = await bot.send_message(**kwargs)
     await db.attach_message(user_id, DESTINATION_CHAT_ID, sent.message_id)
-    await db.log_scan(user_id, username, f"Опубликовано; NFT-подарков: {len(gifts)}")
+    await db.log_scan(user_id, username, f"Опубликован NFT; цена {price} TON")
 
 
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
-        "Бот публикует найденные NFT-подарки в профилях Telegram.\n"
-        "Сканирование возможно только по доступным источникам пользователей, а не по всем аккаунтам Telegram."
+        "Сканирует публичные NFT-листинги TON и показывает адрес кошелька владельца. "
+        "Telegram username и ID указываются только при наличии достоверных данных."
     )
 
 
 @dp.message(Command("scan"))
 async def scan_command(message: Message):
     if scanner is None:
-        await message.answer("❌ Сканер не подключён.\n\nПричина: " + escape(scanner_error))
+        await message.answer("❌ Сканер не подключён.\n" + escape(scanner_error))
         return
-    await message.answer("🔎 Запускаю проверку доступных профилей…")
+    await message.answer("🔎 Проверяю публичные NFT-листинги TON…")
     count = 0
     async for user, gifts in scanner.scan_once():
         await publish_profile(user, gifts)
         count += 1
-    await message.answer(f"Готово. Найдено профилей с NFT-подарками: {count}.")
+    await message.answer(f"Готово. Обработано NFT-листингов: {count}.")
 
 
 @dp.message(Command("topics"))
 async def topics_command(message: Message):
     try:
-        created = await ensure_forum_topics()
+        await ensure_forum_topics()
         saved = await db.get_forum_topics()
         lines = [f"• {title}: {saved.get(key, 'нет')}" for key, title in CATEGORIES]
-        status = "Созданы темы: " + ", ".join(created) if created else "Все пять тем уже созданы."
-        await message.answer(status + "\n\n" + "\n".join(lines))
+        await message.answer("Темы форума готовы.\n\n" + "\n".join(lines))
     except Exception as exc:
-        log.exception("Forum topic setup failed")
-        await message.answer(
-            "Не удалось создать темы. Проверьте права администратора и право «Управление темами».\n"
-            "Причина: " + escape(str(exc))
-        )
+        log.exception("Topic setup failed")
+        await message.answer("Ошибка создания тем: " + escape(str(exc)))
 
 
 @dp.message(Command("status"))
 async def status_command(message: Message):
     if scanner is not None:
-        await message.answer(f"🟢 Сканер подключён.\nИнтервал: {SCAN_INTERVAL} сек.")
+        await message.answer(f"🟢 TON-сканер подключён. Интервал: {SCAN_INTERVAL} сек.")
     else:
-        await message.answer("🔴 Сканер не подключён.\nПричина: " + escape(scanner_error))
+        await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
 
 
 @dp.callback_query(F.data.startswith("reserve:"))
 async def reserve_callback(call: CallbackQuery):
     user_id = int(call.data.split(":", 1)[1])
     who = call.from_user.username or str(call.from_user.id)
-    ok = await db.reserve_profile(user_id, call.from_user.id, who)
-    if not ok:
+    if not await db.reserve_profile(user_id, call.from_user.id, who):
         profile = await db.get_profile(user_id)
         reserved = profile.get("reserved_username") if profile else None
-        suffix = f": @{escape(reserved)}" if reserved and reserved.isalnum() else (f": {escape(reserved)}" if reserved else "")
-        await call.answer("Уже занято" + suffix, show_alert=True)
+        await call.answer("Уже занято" + (f": {escape(reserved)}" if reserved else ""), show_alert=True)
         return
-
     profile = await db.get_profile(user_id)
-    await db.log_scan(
-        user_id,
-        profile.get("username") if profile else None,
-        f"Занято пользователем {who}; Telegram ID {call.from_user.id}",
-    )
-    safe_who = escape("@" + who if call.from_user.username else who)
-    original = call.message.text or ""
+    await db.log_scan(user_id, profile.get("username") if profile else None, f"Занято: {who}")
     await call.message.edit_text(
-        original + f"\n\n🔒 <b>Занял:</b> {safe_who}",
+        (call.message.text or "") + f"\n\n🔒 <b>Занял:</b> {escape(who)}",
         reply_markup=profile_keyboard(user_id, profile.get("username") if profile else None),
         disable_web_page_preview=True,
     )
-    await call.answer("Профиль закреплён за вами")
+    await call.answer("Листинг закреплён за вами")
 
 
 @dp.callback_query(F.data.startswith("log:"))
@@ -191,30 +201,28 @@ async def log_callback(call: CallbackQuery):
     if not profile:
         await call.answer("Запись не найдена", show_alert=True)
         return
-
-    reserved = profile.get("reserved_username")
-    reserved_text = f"да, {escape(reserved)}" if reserved else "нет"
-    log_lines = [
-        f"• {escape(str(x.get('scanned_at', '')))} — {escape(x.get('result') or 'Событие')}"
+    events = "\n".join(
+        f"• {escape(str(x.get('scanned_at', '')))} — {escape(x.get('result') or '')}"
         for x in entries[:10]
-    ]
-    text = (
-        f"📋 <b>Лог профиля</b>\n\n"
-        f"ID: <code>{user_id}</code>\n"
-        f"Username: @{escape(profile.get('username') or 'нет')}\n"
-        f"NFT-подарков: {profile.get('gifts_count', 0)}\n"
-        f"Занято: {reserved_text}\n\n"
-        f"<b>Подарки:</b>\n{escape(profile.get('gift_summary') or 'нет данных')}\n\n"
-        f"<b>Последние события:</b>\n" + ("\n".join(log_lines) if log_lines else "Пока нет событий")
+    ) or "Пока нет событий"
+    wallet = f"Кошелёк: <code>{escape(profile.get('wallet_address') or '')}</code>\n" if profile.get("wallet_address") else ""
+    answer = (
+        "📋 <b>Лог NFT</b>\n\n" + wallet
+        + f"Username: @{escape(profile.get('username') or 'нет')}\n"
+        + f"NFT: {profile.get('gifts_count', 0)}\n"
+        + f"Цена: {profile.get('price') or 'неизвестна'} {escape(profile.get('price_currency') or '')}\n"
+        + f"Занято: {escape(profile.get('reserved_username') or 'нет')}\n\n"
+        + f"<b>Объект:</b>\n{escape(profile.get('gift_summary') or 'нет данных')}\n\n"
+        + f"<b>События:</b>\n{events}"
     )
-    await call.message.answer(text)
+    await call.message.answer(answer)
     await call.answer()
 
 
 @dp.callback_query(F.data.startswith("no_contact:"))
 async def no_contact_callback(call: CallbackQuery):
     await call.answer(
-        "У пользователя нет публичного username. Открыть личный чат по ID может быть невозможно.",
+        "Публичный Telegram-контакт не найден. Адрес кошелька не позволяет написать владельцу в Telegram.",
         show_alert=True,
     )
 
@@ -227,19 +235,19 @@ async def scanner_loop():
                 scanner = ProfileScanner()
                 await scanner.start()
                 scanner_error = ""
-                log.info("Profile scanner connected")
+                log.info("Public TON NFT scanner connected")
             async for user, gifts in scanner.scan_once():
                 await publish_profile(user, gifts)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             scanner_error = str(exc)
-            log.exception("Scanner connection/scan failed")
+            log.exception("TON scanner failed")
             if scanner is not None:
                 try:
                     await scanner.stop()
                 except Exception:
-                    log.exception("Scanner disconnect failed")
+                    log.exception("Scanner stop failed")
                 scanner = None
         await asyncio.sleep(SCAN_INTERVAL)
 
@@ -253,7 +261,7 @@ async def main():
     try:
         await ensure_forum_topics()
     except Exception:
-        log.exception("Forum topic creation failed; check forum mode and bot permissions")
+        log.exception("Forum topic setup failed")
     task = asyncio.create_task(scanner_loop())
     try:
         await dp.start_polling(bot)
