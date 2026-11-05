@@ -239,168 +239,23 @@ class ProfileScanner:
         digest = hashlib.sha256(f"{channel}/{post_id}".encode()).hexdigest()[:15]
         return -(int(digest, 16) or 1)
 
-    async def _scan_chatcrawler(self):
-        """Read public Telegram-market listings and resolve only the linked seller profile username."""
-        page = await self._get("https://chatcrawler.app/c/gifts/listings")
-        if not page:
-            self.last_stats["chatcrawler_unavailable"] = 1
-            return
-
-        self.last_stats["chatcrawler_listings_seen"] = 0
-        self.last_stats["chatcrawler_profiles_checked"] = 0
-        self.last_stats["chatcrawler_with_username"] = 0
-        self.last_stats["chatcrawler_without_username"] = 0
-
-        # A seller link points to a ChatCrawler person page. The preceding lot link
-        # belongs to that listing card; no arbitrary @mentions are treated as sellers.
-        seller_links = list(re.finditer(
-            r'<a\b[^>]*href=["\'](?:https://chatcrawler\.app)?(/c/gifts/people/([0-9]+))[^"\']*["\'][^>]*>(.*?)</a>',
-            page, re.I | re.S
-        ))
-        username_cache = {}
-        previous_end = 0
-        emitted = 0
-
-        for seller_match in seller_links:
-            segment = page[previous_end:seller_match.start()]
-            previous_end = seller_match.end()
-            lot_links = list(re.finditer(
-                r'<a\b[^>]*href=["\'](?:https://chatcrawler\.app)?(/c/nft/[^"\']+)["\'][^>]*>(.*?)</a>',
-                segment, re.I | re.S
-            ))
-            if not lot_links:
-                continue
-            lot_match = lot_links[-1]
-            lot_path = html.unescape(lot_match.group(1))
-            lot_title = re.sub(r"<[^>]+>", " ", lot_match.group(2))
-            lot_title = re.sub(r"\s+", " ", html.unescape(lot_title)).strip()
-            if not lot_title:
-                lot_title = lot_path.rsplit("/", 1)[-1].replace("-", " ")
-
-            self.last_stats["chatcrawler_listings_seen"] += 1
-            seller_id = seller_match.group(2)
-            if seller_id not in username_cache:
-                try:
-                    profile_page = await self._get(
-                        f"https://chatcrawler.app/c/gifts/people/{seller_id}"
-                    )
-                    profile_text = re.sub(r"<[^>]+>", " ", profile_page)
-                    profile_text = re.sub(r"\s+", " ", html.unescape(profile_text))
-                    # Only accept the username explicitly shown in the profile's Username field.
-                    found = re.search(
-                        r"\bUsername\s*@([A-Za-z][A-Za-z0-9_]{4,31})\b",
-                        profile_text, re.I
-                    )
-                    username_cache[seller_id] = found.group(1) if found else None
-                    self.last_stats["chatcrawler_profiles_checked"] += 1
-                except Exception:
-                    log.exception("ChatCrawler seller profile lookup failed: %s", seller_id)
-                    username_cache[seller_id] = None
-
-            username = username_cache[seller_id]
-            if not username:
-                self.last_stats["chatcrawler_without_username"] += 1
-                continue
-
-            self.last_stats["chatcrawler_with_username"] += 1
-            emitted += 1
-            listing_url = "https://chatcrawler.app" + lot_path
-            digest = hashlib.sha256(
-                f"chatcrawler/{seller_id}/{lot_path}".encode()
-            ).hexdigest()[:15]
-            profile = SimpleNamespace(
-                id=-(int(digest, 16) or 1),
-                username=username,
-                first_name=f"Продавец @{username}",
-                last_name="",
-                listing_url=listing_url,
-                price_ton=None,
-                category="unpriced",
-                telegram_id=int(seller_id) if seller_id.isdigit() else None,
-                source="ChatCrawler · публичный маркет",
-            )
-            gift = SimpleNamespace(title=lot_title, address=None, url=listing_url)
-            yield profile, [gift]
-            if emitted >= 30:
-                break
-
     async def scan_once(self):
-        self.last_stats = {
-            "channels_total": len(CHANNELS),
-            "channels_checked": 0,
-            "channels_unavailable": 0,
-            "posts_checked": 0,
-            "gift_posts": 0,
-            "seller_contacts": 0,
-            "ignored_without_seller": 0,
-            "ignored_non_russian": 0,
-            "ignored_high_rating": 0,
-            "with_gram_price": 0,
-            "with_username_and_price": 0,
-            "chatcrawler_unavailable": 0,
-        }
-        try:
-            async for profile, gifts in self._scan_chatcrawler():
-                yield profile, gifts
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            self.last_stats["chatcrawler_unavailable"] = 1
-            log.exception("ChatCrawler listings scan failed")
-        for channel in CHANNELS:
-            try:
-                page = await self._get(f"https://t.me/s/{channel}")
-                if not page:
-                    self.last_stats["channels_unavailable"] += 1
-                    continue
-                self.last_stats["channels_checked"] += 1
-                for post_channel, post_id, text, anchors in self._blocks(page):
-                    self.last_stats["posts_checked"] += 1
-                    if not GIFT_WORDS.search(text):
-                        continue
-                    self.last_stats["gift_posts"] += 1
-                    # Accept Russian, English and Chinese gift listings.
-                    if not self._has_supported_language(text):
-                        self.last_stats["ignored_non_russian"] += 1
-                        continue
-                    # Exclude only explicitly stated ratings of 80–100; never guess ratings.
-                    if self._has_high_rating(text):
-                        self.last_stats["ignored_high_rating"] += 1
-                        continue
-                    username = self._username(text, anchors, post_channel)
-                    if username:
-                        self.last_stats["seller_contacts"] += 1
-                    else:
-                        # Channel announcements without an identifiable seller are not seller profiles.
-                        self.last_stats["ignored_without_seller"] += 1
-                        continue
-                    price = self._price(text)
-                    if price is not None:
-                        self.last_stats["with_gram_price"] += 1
-                        if username:
-                            self.last_stats["with_username_and_price"] += 1
+        """Only verified website feeds may publish seller profiles.
 
-                    post_url = f"https://t.me/{post_channel}/{post_id}"
-                    gift = SimpleNamespace(
-                        title="Публичное объявление о Telegram-подарке",
-                        address=None,
-                        url=post_url,
-                    )
-                    profile = SimpleNamespace(
-                        id=self._internal_id(post_channel, post_id),
-                        username=username,
-                        first_name=f"Продавец @{username}",
-                        last_name="",
-                        listing_url=post_url,
-                        price_ton=price,  # legacy DB field; value is GRAM only
-                        category=self._category(price) if price is not None else "unpriced",
-                        telegram_id=None,
-                        source=f"t.me/{post_channel}",
-                    )
-                    yield profile, [gift]
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                self.last_stats["channels_unavailable"] += 1
-                log.exception("Could not scan public channel @%s", channel)
-        log.info("Public Telegram scan stats: %s", self.last_stats)
+        Channel scraping is deliberately disabled: it produced channel-post
+        noise, not a verified seller directory. ChatCrawler documents single
+        query search, not bulk profile export; marketplace feeds that mask
+        seller identity are not treated as seller sources.
+        """
+        self.last_stats = {
+            "website_sources_checked": 0,
+            "website_sources_unavailable": 0,
+            "profiles_with_verified_username": 0,
+            "channels_scanned": 0,
+            "reason": (
+                "No verified free bulk website feed currently exposes both "
+                "gift listing and seller Telegram username"
+            ),
+        }
+        if False:
+            yield None, None
