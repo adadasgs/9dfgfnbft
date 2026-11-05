@@ -260,7 +260,11 @@ async def reserve_callback(call: CallbackQuery):
     await db.log_scan(user_id, profile.get("username") if profile else None, f"Занято: {who}")
     await call.message.edit_text(
         (call.message.text or "") + f"\n\n🔒 <b>Занял:</b> {escape(who)}",
-        reply_markup=profile_keyboard(\n            user_id,\n            profile.get("username") if profile else None,\n            profile.get("listing_url") if profile else None,\n        ),
+        reply_markup=profile_keyboard(
+            user_id,
+            profile.get("username") if profile else None,
+            profile.get("listing_url") if profile else None,
+        ),
         disable_web_page_preview=True,
     )
     await call.answer("Листинг закреплён за вами")
