@@ -52,23 +52,21 @@ async def ensure_forum_topics():
                 log.exception("Could not rename topic %s", title)
 
 
-def profile_keyboard(user_id, username):
-    rows = [[
-        InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}"),
-        InlineKeyboardButton(text="📋 Открыть лог", callback_data=f"log:{user_id}"),
-    ]]
-    if username:
-        rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", url=f"https://t.me/{username}")])
-        rows.append([
-            InlineKeyboardButton(text="🔎 ChatCrawler профиль", url="https://chatcrawler.app/c/gifts/people"),
-            InlineKeyboardButton(text="🎁 Gift Explore", url="https://t.me/GiftExploreBot"),
-        ])
-        rows.append([
-            InlineKeyboardButton(text="🛍 Лоты ChatCrawler", url="https://chatcrawler.app/c/gifts/listings"),
-        ])
-    else:
-        rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", callback_data=f"no_contact:{user_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def profile_keyboard(user_id, username, listing_url=None):
+    open_button = (
+        InlineKeyboardButton(text="🔗 Открыть лот", url=listing_url)
+        if listing_url and listing_url.startswith(("https://t.me/", "https://"))
+        else InlineKeyboardButton(text="🔗 Открыть лот", callback_data=f"open_missing:{user_id}")
+    )
+    seller_button = (
+        InlineKeyboardButton(text="✉️ Написать продавцу", url=f"https://t.me/{username}")
+        if username
+        else InlineKeyboardButton(text="✉️ Написать продавцу", callback_data=f"no_contact:{user_id}")
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [open_button, InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}")],
+        [InlineKeyboardButton(text="📋 Лог", callback_data=f"log:{user_id}"), seller_button],
+    ])
 
 
 async def publish_profile(user, gifts):
@@ -138,7 +136,7 @@ async def publish_profile(user, gifts):
     kwargs = {
         "chat_id": DESTINATION_CHAT_ID,
         "text": text,
-        "reply_markup": profile_keyboard(user_id, username),
+        "reply_markup": profile_keyboard(user_id, username, getattr(user, "listing_url", None)),
         "disable_web_page_preview": True,
     }
     if topics.get(category):
@@ -215,16 +213,15 @@ async def topics_command(message: Message):
 @dp.message(Command("sources"))
 async def sources_command(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔎 ChatCrawler — поиск профилей", url="https://chatcrawler.app/c/gifts/people")],
-        [InlineKeyboardButton(text="🛍 ChatCrawler — подарки на продаже", url="https://chatcrawler.app/c/gifts/listings")],
-        [InlineKeyboardButton(text="🎁 Gift Explore — поиск подарков", url="https://t.me/GiftExploreBot")],
+        [InlineKeyboardButton(text="🔎 ChatCrawler — публичный поиск", url="https://app.chatcrawler.app/")],
+        [InlineKeyboardButton(text="🎁 Gift Explore — поиск подарков", url="https://t.me/giftexplorebot")],
     ])
     await message.answer(
         "<b>Источники дополнительной проверки</b>\n\n"
-        "• ChatCrawler — бесплатный поиск публичных Telegram-профилей по username или ID.\n"
-        "• Gift Explore — поиск подарков и аналитика; бесплатные запросы ограничены.\n\n"
-        "Эти ссылки открывают сервисы отдельно. Автоматическое чтение их ответов "
-        "не подключено, поскольку публичного API для такого доступа нет.",
+        "• ChatCrawler — бесплатный поиск по открытым Telegram-постам и профилям авторов.\n"
+        "• Gift Explore — поиск подарков, история цен и поиск владельцев; бесплатные запросы ограничены.\n\n"
+        "Сервисы открываются отдельно: подтверждённого публичного API для автоматического "
+        "получения их результатов не найдено. Бот не будет выдавать имя канала или кошелёк за username продавца.",
         reply_markup=keyboard,
     )
 
@@ -252,7 +249,7 @@ async def reserve_callback(call: CallbackQuery):
     await db.log_scan(user_id, profile.get("username") if profile else None, f"Занято: {who}")
     await call.message.edit_text(
         (call.message.text or "") + f"\n\n🔒 <b>Занял:</b> {escape(who)}",
-        reply_markup=profile_keyboard(user_id, profile.get("username") if profile else None),
+        reply_markup=profile_keyboard(\n            user_id,\n            profile.get("username") if profile else None,\n            profile.get("listing_url") if profile else None,\n        ),
         disable_web_page_preview=True,
     )
     await call.answer("Листинг закреплён за вами")
@@ -281,6 +278,11 @@ async def log_callback(call: CallbackQuery):
     )
     await call.message.answer(answer)
     await call.answer()
+
+
+@dp.callback_query(F.data.startswith("open_missing:"))
+async def open_missing_callback(call: CallbackQuery):
+    await call.answer("Ссылка на исходный лот отсутствует в источнике.", show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("no_contact:"))
