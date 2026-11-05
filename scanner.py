@@ -10,41 +10,93 @@ from types import SimpleNamespace
 import aiohttp
 
 log = logging.getLogger("profile-radar")
-DEFAULT_CHANNELS = "podarkitgnft,GiftTradeee,brankasgift,giftwhalefeed,GiftNotification,Gift_Alerts,GiftChanges,GiftChangesUpdates,TGcollectors,giftinsider,Gifted,GiftsMage,GiftChangesIDs,GiftChangesModels,GiftChangesAuctions,GiftNFTs,GIFT_PODARKI"
-CHANNELS = [x.strip().lstrip("@") for x in os.getenv("SCAN_CHANNELS", DEFAULT_CHANNELS).split(",") if x.strip()]
-SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "30")), 100))
+
+# Public Telegram gift-sale communities and announcement channels.
+# Only public posts are read; no private groups, user sessions, wallets or TON APIs.
+DEFAULT_CHANNELS = (
+    "trade_gifts_chat,giftsatellite,podarkirar_novostya_prodatcy,NFTGiftNewz,"
+    "GiftChangesUpdates,GiftChanges,Gift_Alerts,GiftNotification,GiftNFTs,"
+    "GiftTradeee,podarkitgnft,GIFT_PODARKI,Gifted,TGcollectors,giftinsider,"
+    "GiftsMage,GiftWhaleFeed,GiftChangesModels,GiftChangesAuctions,"
+    "GiftChangesIDs,gift_newstg,giftroad,indigoGif,brankasgift"
+)
+CHANNELS = [
+    x.strip().lstrip("@")
+    for x in os.getenv("SCAN_CHANNELS", DEFAULT_CHANNELS).split(",")
+    if x.strip()
+]
+SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "50")), 100))
 REQUEST_INTERVAL = 1.1
-GIFT_WORDS = re.compile(r"(gift|подарок|подарки|nft|коллекционн|collectible|plush pepe|durov|dog|signet|lol pop|jack in the box|чашка|шапка|медвед|игрушк)", re.I)
-SELLER_CUE = re.compile(r"(продавец|продавца|пишите|писать|контакт|связь|seller|contact|dm|telegram|телеграм|по вопросам|купить у|обращаться)", re.I)
-PRICE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:gram|grams|грам(?:м|ма|мов)?|гр\.?)(?!\w)", re.I)
+
+GIFT_WORDS = re.compile(
+    r"(gift|подарок|подарки|nft|коллекционн|collectible|plush pepe|"
+    r"durov|dog|signet|lol pop|jack in the box|чашка|шапка|медвед|игрушк)",
+    re.I,
+)
+SELLER_CUE = re.compile(
+    r"(продавец|продавца|пишите|писать|контакт|связь|seller|contact|"
+    r"\bdm\b|по вопросам|купить у|обращаться|для покупки|сделка|"
+    r"предложение|продам|продаю|продаётся|продается)",
+    re.I,
+)
+PRICE_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:gram|grams|грам(?:м|ма|мов)?|гр\.?)(?!\w)",
+    re.I,
+)
 USERNAME_RE = re.compile(r"(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_]{4,31})")
-TME_RE = re.compile(r"https?://t\.me/([A-Za-z][A-Za-z0-9_]{4,31})(?:\?[^\s<]*)?", re.I)
+TME_RE = re.compile(r"(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{4,31})(?:[/?#][^\s<]*)?", re.I)
+RESERVED_HANDLES = {
+    "share", "proxy", "s", "addstickers", "addemoji", "joinchat",
+    "gift_satellite_bot", "ogmobot", "giftexplorebot",
+}
 
 
-class TextExtractor(HTMLParser):
+class MessageParser(HTMLParser):
+    """Extracts only Telegram message text and anchors, respecting nested tags."""
+
     def __init__(self):
-        super().__init__()
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.target_depth = None
         self.parts = []
-        self.in_text = False
+        self.anchors = []
+        self._anchor = None
 
     def handle_starttag(self, tag, attrs):
-        classes = dict(attrs).get("class", "").split()
-        if "tgme_widget_message_text" in classes:
-            self.in_text = True
-        elif self.in_text and tag == "br":
-            self.parts.append(" ")
-
-    def handle_endtag(self, tag):
-        if tag == "div" and self.in_text:
-            self.in_text = False
+        attrs = dict(attrs)
+        classes = attrs.get("class", "").split()
+        if tag == "div" and "tgme_widget_message_text" in classes:
+            self.target_depth = len(self.stack)
+        if self.target_depth is not None:
+            if tag == "a":
+                self._anchor = {"href": attrs.get("href", ""), "text": []}
+            elif tag == "br":
+                self.parts.append(" ")
+        self.stack.append(tag)
 
     def handle_data(self, data):
-        if self.in_text:
+        if self.target_depth is not None:
             self.parts.append(data)
+            if self._anchor is not None:
+                self._anchor["text"].append(data)
+
+    def handle_endtag(self, tag):
+        if self.target_depth is not None and self._anchor is not None and tag == "a":
+            self.anchors.append({
+                "href": self._anchor["href"],
+                "text": "".join(self._anchor["text"]).strip(),
+            })
+            self._anchor = None
+        if self.target_depth is not None and tag == "div" and len(self.stack) - 1 == self.target_depth:
+            self.target_depth = None
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == tag:
+                del self.stack[i:]
+                break
 
 
 class ProfileScanner:
-    """Scans public Telegram post previews; only explicit seller contacts are emitted."""
+    """Scans public Telegram gift ads and emits only explicitly advertised contacts."""
 
     def __init__(self):
         self.session = None
@@ -53,10 +105,13 @@ class ProfileScanner:
 
     async def start(self):
         timeout = aiohttp.ClientTimeout(total=20, connect=8)
-        self.session = aiohttp.ClientSession(timeout=timeout, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; PublicGiftRadar/1.0)",
-            "Accept": "text/html,application/xhtml+xml",
-        })
+        self.session = aiohttp.ClientSession(
+            timeout=timeout,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; PublicGiftRadar/2.0)",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
 
     async def stop(self):
         if self.session and not self.session.closed:
@@ -79,77 +134,129 @@ class ProfileScanner:
 
     @staticmethod
     def _blocks(page):
-        starts = [m.start() for m in re.finditer(r'<div[^>]+class="[^"]*tgme_widget_message_wrap', page)]
+        starts = [
+            m.start()
+            for m in re.finditer(
+                r'<div[^>]+class="[^"]*tgme_widget_message_wrap',
+                page,
+            )
+        ]
         for i, start in enumerate(starts):
-            block = page[start:starts[i + 1] if i + 1 < len(starts) else len(page)]
+            block = page[starts[i]:starts[i + 1] if i + 1 < len(starts) else len(page)]
             post = re.search(r'data-post="([A-Za-z0-9_]+)/([0-9]+)"', block)
-            body = re.search(r'<div[^>]+class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', block, re.S)
-            if post and body:
-                parser = TextExtractor()
-                parser.feed(body.group(1))
-                text = re.sub(r"\s+", " ", html.unescape(" ".join(parser.parts))).strip()
-                yield post.group(1), post.group(2), text, body.group(1)
+            if not post:
+                continue
+            parser = MessageParser()
+            parser.feed(block)
+            text = re.sub(r"\s+", " ", html.unescape(" ".join(parser.parts))).strip()
+            if text:
+                yield post.group(1), post.group(2), text, parser.anchors
 
     @staticmethod
-    def _username(text, fragment, channel):
+    def _username(text, anchors, channel):
         if not SELLER_CUE.search(text):
             return None
-        names = set(USERNAME_RE.findall(text)) | set(TME_RE.findall(fragment))
-        names = {n for n in names if n.lower() != channel.lower() and n.lower() not in {"share", "proxy"}}
-        return next(iter(names)) if len(names) == 1 else None
+
+        candidates = set()
+        for cue in SELLER_CUE.finditer(text):
+            # A username must be close to an explicit seller/contact cue.
+            window = text[max(0, cue.start() - 110):min(len(text), cue.end() + 150)]
+            candidates.update(USERNAME_RE.findall(window))
+            candidates.update(TME_RE.findall(window))
+
+        # Also accept an explicit @handle hyperlink when the surrounding post
+        # clearly contains seller/contact wording.
+        for anchor in anchors:
+            label = anchor.get("text", "")
+            href = anchor.get("href", "")
+            if label.startswith("@"):
+                candidates.update(USERNAME_RE.findall(label))
+            elif re.search(r"(написать|продав|контакт|связ|telegram|телеграм)", label, re.I):
+                candidates.update(TME_RE.findall(href))
+
+        candidates = {
+            name for name in candidates
+            if name.lower() != channel.lower()
+            and name.lower() not in RESERVED_HANDLES
+            and not name.lower().endswith("_bot")
+        }
+        return next(iter(candidates)) if len(candidates) == 1 else None
 
     @staticmethod
     def _price(text):
-        m = PRICE_RE.search(text)
-        if not m:
+        match = PRICE_RE.search(text)
+        if not match:
             return None
         try:
-            p = float(m.group(1).replace(",", "."))
-            return p if p > 0 else None
+            price = float(match.group(1).replace(",", "."))
+            return price if price > 0 else None
         except ValueError:
             return None
 
     @staticmethod
     def _category(price):
-        if price < 5: return "under5"
-        if price < 15: return "5_15"
-        if price < 27.5: return "15_27_5"
-        if price < 60: return "27_5_60"
+        if price < 5:
+            return "under5"
+        if price < 15:
+            return "5_15"
+        if price < 27.5:
+            return "15_27_5"
+        if price < 60:
+            return "27_5_60"
         return "over60"
 
     @staticmethod
     def _internal_id(channel, post_id):
-        # Local database key, never a Telegram account ID.
+        # Local listing key only; never shown as a Telegram account ID.
         digest = hashlib.sha256(f"{channel}/{post_id}".encode()).hexdigest()[:15]
         return -(int(digest, 16) or 1)
 
     async def scan_once(self):
-        self.last_stats = {"channels_checked": 0, "posts_checked": 0, "gift_posts": 0, "with_username": 0}
+        self.last_stats = {
+            "channels_total": len(CHANNELS),
+            "channels_checked": 0,
+            "channels_unavailable": 0,
+            "posts_checked": 0,
+            "gift_posts": 0,
+            "seller_contacts": 0,
+            "with_gram_price": 0,
+            "with_username_and_price": 0,
+        }
         for channel in CHANNELS:
             try:
                 page = await self._get(f"https://t.me/s/{channel}")
+                if not page:
+                    self.last_stats["channels_unavailable"] += 1
+                    continue
                 self.last_stats["channels_checked"] += 1
-                for post_channel, post_id, text, fragment in self._blocks(page):
+                for post_channel, post_id, text, anchors in self._blocks(page):
                     self.last_stats["posts_checked"] += 1
                     if not GIFT_WORDS.search(text):
                         continue
                     self.last_stats["gift_posts"] += 1
-                    username = self._username(text, fragment, post_channel)
-                    price = self._price(text)
-                    if not username or price is None:
+                    username = self._username(text, anchors, post_channel)
+                    if not username:
                         continue
-                    self.last_stats["with_username"] += 1
-                    url = f"https://t.me/{post_channel}/{post_id}"
-                    gift = SimpleNamespace(title=text[:160] or "Telegram gift", address=None, url=url)
+                    self.last_stats["seller_contacts"] += 1
+                    price = self._price(text)
+                    if price is None:
+                        continue
+                    self.last_stats["with_gram_price"] += 1
+                    self.last_stats["with_username_and_price"] += 1
+
+                    post_url = f"https://t.me/{post_channel}/{post_id}"
+                    gift = SimpleNamespace(
+                        title=text[:500] or "Telegram gift",
+                        address=None,
+                        url=post_url,
+                    )
                     profile = SimpleNamespace(
                         id=self._internal_id(post_channel, post_id),
                         username=username,
                         first_name=f"Продавец @{username}",
                         last_name="",
-                        wallet_address=None,
-                        nft_address=None,
-                        listing_url=url,
-                        price_ton=price,
+                        listing_url=post_url,
+                        price_ton=price,  # legacy DB field; value is GRAM only
                         category=self._category(price),
                         telegram_id=None,
                         source=f"t.me/{post_channel}",
@@ -158,5 +265,6 @@ class ProfileScanner:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.last_stats["channels_unavailable"] += 1
                 log.exception("Could not scan public channel @%s", channel)
         log.info("Public Telegram scan stats: %s", self.last_stats)
