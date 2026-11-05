@@ -319,7 +319,7 @@ class ProfileScanner:
                             last_name=getattr(seller, "last_name", None),
                             telegram_id=None,
                             price_ton=price,
-                            price_currency="XTR",
+                            price_currency="Stars",
                             source=None,
                             listing_url=listing_url,
                         )
