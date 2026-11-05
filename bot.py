@@ -176,8 +176,14 @@ async def scan_command(message: Message):
                 published += 1
             else:
                 duplicates += 1
+        stats = scanner.last_stats or {}
         await status.edit_text(
-            f"✅ Готово. Новых карточек в группе: {published}. Повторов: {duplicates}."
+            f"✅ Готово. Новых карточек в группе: {published}. Повторов: {duplicates}.\n\n"
+            f"🔎 Поиск: запросов {stats.get('search_queries', 0)}, "
+            f"результатов поисковика {stats.get('search_results', 0)}, "
+            f"страниц о подарках {stats.get('gift_results', 0)}.\n"
+            f"👤 Совпадений с явно указанным продавцом: {stats.get('seller_matches', 0)}.\n"
+            f"⚠️ Ошибок поисковых запросов: {stats.get('search_errors', 0)}."
         )
     except Exception:
         log.exception("Manual /scan failed")
