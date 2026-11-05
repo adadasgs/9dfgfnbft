@@ -1,13 +1,15 @@
 import asyncio
 import logging
 import os
+from html import escape
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
-from html import escape
+
 import database as db
 from scanner import ProfileScanner
 
@@ -19,8 +21,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DESTINATION_CHAT_ID = int(os.getenv("DESTINATION_CHAT_ID", "0"))
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "900"))
 
-# Same five GRAM bands as the Portals project. A profile is not assigned a band
-# until a reliable market valuation source is connected; never invent a price.
+# Price categories are deliberately not assigned until a trustworthy valuation exists.
 CATEGORIES = [
     ("under5", "До 5 GRAM"),
     ("5_15", "5–15 GRAM"),
@@ -48,11 +49,12 @@ async def ensure_forum_topics():
 
 
 def profile_keyboard(user_id: int, username: str | None):
-    contact_url = f"https://t.me/{username}" if username else None
-    rows = [[InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}"),
-             InlineKeyboardButton(text="📋 Открыть лог", callback_data=f"log:{user_id}")]]
-    if contact_url:
-        rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", url=contact_url)])
+    rows = [[
+        InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}"),
+        InlineKeyboardButton(text="📋 Открыть лог", callback_data=f"log:{user_id}"),
+    ]]
+    if username:
+        rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", url=f"https://t.me/{username}")])
     else:
         rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", callback_data=f"no_contact:{user_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -68,40 +70,40 @@ async def publish_profile(user, gifts):
     display_name = " ".join(
         x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x
     ) or "Telegram user"
-    safe_name = escape(display_name)
-    safe_username = escape(username) if username else None
     profile_url = f"https://t.me/{username}" if username else None
     summary = "\n".join(f"• {escape(gift_name(g))}" for g in gifts[:20])
 
     await db.save_profile({
-        "user_id": user_id, "username": username, "display_name": display_name,
-        "profile_url": profile_url, "gifts_count": len(gifts),
-        "gift_summary": summary, "category": "unpriced"
+        "user_id": user_id,
+        "username": username,
+        "display_name": display_name,
+        "profile_url": profile_url,
+        "gifts_count": len(gifts),
+        "gift_summary": summary,
+        "category": "unpriced",
     })
     existing = await db.get_profile(user_id)
-    # Publish only once; updates are reflected in the log/database, avoiding duplicate group posts.
     if existing and existing.get("message_id"):
-        await db.log_scan(user_id, username, f"Найдено NFT-подарков: {len(gifts)}")
+        await db.log_scan(user_id, username, f"Повторная проверка: NFT-подарков {len(gifts)}")
         return
 
-    if profile_url:
-        profile_line = f'👤 Продавец: <a href="{profile_url}">{safe_name}</a>'
-    else:
-        profile_line = f"👤 Продавец: {safe_name}"
-    username_line = f"🔗 Username: @{safe_username}" if safe_username else "🔗 Username: не указан"
-    text = (
+    safe_name = escape(display_name)
+    username_line = f"🔗 Username: @{escape(username)}" if username else "🔗 Username: не указан"
+    profile_line = f'👤 Продавец: <a href="{profile_url}">{safe_name}</a>' if profile_url else f"👤 Продавец: {safe_name}"
+    card_text = (
         "🎁 <b>Найдены NFT-подарки в профиле</b>\n\n"
-        f"{profile_line}\\n"
-        f"{username_line}\\n"
-        f"🆔 Telegram ID: <code>{user_id}</code>\\n"
-        f"🧩 NFT-подарков: <b>{len(gifts)}</b>\\n\\n"
-        f"<b>Подарки:</b>\\n{summary}\\n\\n"
+        f"{profile_line}\n"
+        f"{username_line}\n"
+        f"🆔 Telegram ID: <code>{user_id}</code>\n"
+        f"🧩 NFT-подарков: <b>{len(gifts)}</b>\n\n"
+        f"<b>Подарки:</b>\n{summary}\n\n"
         "💎 Оценка цены: пока не рассчитана"
     )
     sent = await bot.send_message(
-        DESTINATION_CHAT_ID, text,
+        DESTINATION_CHAT_ID,
+        card_text,
         reply_markup=profile_keyboard(user_id, username),
-        disable_web_page_preview=True
+        disable_web_page_preview=True,
     )
     await db.attach_message(user_id, DESTINATION_CHAT_ID, sent.message_id)
     await db.log_scan(user_id, username, f"Опубликовано; NFT-подарков: {len(gifts)}")
@@ -112,7 +114,7 @@ async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
         "Бот публикует найденные NFT-подарки в профилях Telegram.\n"
-        "Сканирование работает по известным пользователям или участникам указанной исходной группы."
+        "Сканирование возможно только по доступным источникам пользователей, а не по всем аккаунтам Telegram."
     )
 
 
@@ -139,13 +141,16 @@ async def topics_command(message: Message):
         await message.answer(status + "\n\n" + "\n".join(lines))
     except Exception as exc:
         log.exception("Forum topic setup failed")
-        await message.answer("Не удалось создать темы. Дайте боту права администратора и право «Управление темами».\\nПричина: " + escape(str(exc)))
+        await message.answer(
+            "Не удалось создать темы. Проверьте права администратора и право «Управление темами».\n"
+            "Причина: " + escape(str(exc))
+        )
 
 
 @dp.message(Command("status"))
 async def status_command(message: Message):
     if scanner is not None:
-        await message.answer("🟢 Сканер подключён.\nИнтервал: " + str(SCAN_INTERVAL) + " сек.")
+        await message.answer(f"🟢 Сканер подключён.\nИнтервал: {SCAN_INTERVAL} сек.")
     else:
         await message.answer("🔴 Сканер не подключён.\nПричина: " + escape(scanner_error))
 
@@ -154,16 +159,27 @@ async def status_command(message: Message):
 async def reserve_callback(call: CallbackQuery):
     user_id = int(call.data.split(":", 1)[1])
     who = call.from_user.username or str(call.from_user.id)
-    safe_who = escape(who)
     ok = await db.reserve_profile(user_id, call.from_user.id, who)
     if not ok:
         profile = await db.get_profile(user_id)
-        await call.answer("Уже занято" + (f": @{profile['reserved_username']}" if profile and profile.get('reserved_username') else ""), show_alert=True)
+        reserved = profile.get("reserved_username") if profile else None
+        suffix = f": @{escape(reserved)}" if reserved and reserved.isalnum() else (f": {escape(reserved)}" if reserved else "")
+        await call.answer("Уже занято" + suffix, show_alert=True)
         return
+
     profile = await db.get_profile(user_id)
-    await db.log_scan(user_id, profile.get("username") if profile else None, f"Занял профиль: {who} (Telegram ID {call.from_user.id})")
-    text = (call.message.text or "") + f"\n\n🔒 Занял: {safe_who}
-    await call.message.edit_text(text, reply_markup=profile_keyboard(user_id, profile.get("username")), disable_web_page_preview=True)
+    await db.log_scan(
+        user_id,
+        profile.get("username") if profile else None,
+        f"Занято пользователем {who}; Telegram ID {call.from_user.id}",
+    )
+    safe_who = escape("@" + who if call.from_user.username else who)
+    original = call.message.text or ""
+    await call.message.edit_text(
+        original + f"\n\n🔒 <b>Занял:</b> {safe_who}",
+        reply_markup=profile_keyboard(user_id, profile.get("username") if profile else None),
+        disable_web_page_preview=True,
+    )
     await call.answer("Профиль закреплён за вами")
 
 
@@ -175,15 +191,20 @@ async def log_callback(call: CallbackQuery):
     if not profile:
         await call.answer("Запись не найдена", show_alert=True)
         return
+
     reserved = profile.get("reserved_username")
-    log_lines = [f"• {escape(x.get('scanned_at', ''))}: {escape(x.get('result') or 'Событие')}" for x in entries[:10]]
+    reserved_text = f"да, {escape(reserved)}" if reserved else "нет"
+    log_lines = [
+        f"• {escape(str(x.get('scanned_at', '')))} — {escape(x.get('result') or 'Событие')}"
+        for x in entries[:10]
+    ]
     text = (
         f"📋 <b>Лог профиля</b>\n\n"
         f"ID: <code>{user_id}</code>\n"
-        f"Username: @{profile.get('username') or 'нет'}\n"
+        f"Username: @{escape(profile.get('username') or 'нет')}\n"
         f"NFT-подарков: {profile.get('gifts_count', 0)}\n"
-        f"Занято: {'да, @' + reserved if reserved else 'нет'}\n\n"
-        f"<b>Подарки:</b>\n{profile.get('gift_summary') or 'нет данных'}\n\n"
+        f"Занято: {reserved_text}\n\n"
+        f"<b>Подарки:</b>\n{escape(profile.get('gift_summary') or 'нет данных')}\n\n"
         f"<b>Последние события:</b>\n" + ("\n".join(log_lines) if log_lines else "Пока нет событий")
     )
     await call.message.answer(text)
@@ -192,7 +213,10 @@ async def log_callback(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("no_contact:"))
 async def no_contact_callback(call: CallbackQuery):
-    await call.answer("У пользователя нет публичного username. Открыть личный чат по ID может быть невозможно.", show_alert=True)
+    await call.answer(
+        "У пользователя нет публичного username. Открыть личный чат по ID может быть невозможно.",
+        show_alert=True,
+    )
 
 
 async def scanner_loop():
@@ -238,6 +262,7 @@ async def main():
         await bot.session.close()
         if scanner:
             await scanner.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
