@@ -32,6 +32,7 @@ CATEGORIES = [
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 scanner = None
+scanner_error = "Сканер ещё не запускался"
 
 
 def profile_keyboard(user_id: int, username: str | None):
@@ -106,7 +107,7 @@ async def start(message: Message):
 @dp.message(Command("scan"))
 async def scan_command(message: Message):
     if scanner is None:
-        await message.answer("Сканер ещё не подключён. Проверьте настройки Render.")
+        await message.answer("❌ Сканер не подключён.\\n\\nПричина: " + escape(scanner_error))
         return
     await message.answer("🔎 Запускаю проверку доступных профилей…")
     count = 0
@@ -114,6 +115,14 @@ async def scan_command(message: Message):
         await publish_profile(user, gifts)
         count += 1
     await message.answer(f"Готово. Найдено профилей с NFT-подарками: {count}.")
+
+
+@dp.message(Command("status"))
+async def status_command(message: Message):
+    if scanner is not None:
+        await message.answer("🟢 Сканер подключён.\\nИнтервал: " + str(SCAN_INTERVAL) + " сек.")
+    else:
+        await message.answer("🔴 Сканер не подключён.\\nПричина: " + escape(scanner_error))
 
 
 @dp.callback_query(F.data.startswith("reserve:"))
@@ -159,16 +168,27 @@ async def no_contact_callback(call: CallbackQuery):
 
 
 async def scanner_loop():
-    global scanner
-    scanner = ProfileScanner()
-    await scanner.start()
-    log.info("Profile scanner connected")
+    global scanner, scanner_error
     while True:
         try:
+            if scanner is None:
+                scanner = ProfileScanner()
+                await scanner.start()
+                scanner_error = ""
+                log.info("Profile scanner connected")
             async for user, gifts in scanner.scan_once():
                 await publish_profile(user, gifts)
-        except Exception:
-            log.exception("Scanner cycle failed")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            scanner_error = str(exc)
+            log.exception("Scanner connection/scan failed")
+            if scanner is not None:
+                try:
+                    await scanner.stop()
+                except Exception:
+                    log.exception("Scanner disconnect failed")
+                scanner = None
         await asyncio.sleep(SCAN_INTERVAL)
 
 
