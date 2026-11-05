@@ -110,15 +110,16 @@ async def publish_profile(user, gifts):
         heading = "💎 <b>Найден NFT-листинг в сети TON</b>"
     else:
         seller = f"👤 Продавец: {escape(name)}"
-        identity = (f"🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: <code>{telegram_id}</code>" if telegram_id else f"🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: источник не предоставил")
+        identity = (f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: <code>{telegram_id}</code>' if telegram_id else f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: источник не предоставил')
         heading = "🎁 <b>Найдено публичное объявление о подарке</b>"
 
     price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
+    source_note = "Источник: публичный пост Telegram; username взят из явно указанного контакта." if source else "Контакт показывается только при наличии подтверждённого username."
     text = (
         f"{heading}\n\n{seller}\n{identity}\n"
-        f"🧩 NFT: <b>{len(gifts)}</b>\n{price_text}\n\n"
-        f"<b>Объект:</b>\n{summary}\n\n"
-        "Источник: публичный пост Telegram; username взят из явно указанного контакта." if source else "Контакт показывается только при наличии подтверждённого username."
+        f"🧩 Объявление: <b>{len(gifts)}</b>\n{price_text}\n\n"
+        f"<b>Текст объявления:</b>\n{summary}\n\n"
+        f"{source_note}"
     )
     topics = await db.get_forum_topics()
     kwargs = {
