@@ -18,7 +18,13 @@ DEFAULT_CHANNELS = (
     "GiftChangesUpdates,GiftChanges,Gift_Alerts,GiftNotification,GiftNFTs,"
     "GiftTradeee,podarkitgnft,GIFT_PODARKI,Gifted,TGcollectors,giftinsider,"
     "GiftsMage,GiftWhaleFeed,GiftChangesModels,GiftChangesAuctions,"
-    "GiftChangesIDs,gift_newstg,giftroad,indigoGif,brankasgift"
+    "GiftChangesIDs,gift_newstg,giftroad,indigoGif,brankasgift,"
+    "project_crystal,nexikj,DosikGIFTS,agentdurovaton,getSendGifts,reystqq,"
+    "chaoblog,gifttradeservise,projectx_nft,cryptoblog,hikoded,whisper_in_the_night,"
+    "cryptaad,benzin,CreepyGifts,alishka_gifts,snyalcepik,semenchuk,groza,"
+    "loxssy52,ohuenko,PodarokDurova,bape,vices,borov_club,lalyounft,bafet,"
+    "DuckLodge,nonstopiiiikk,durovgoyda,mr_tony,digest,roxtalk,zorgannft,"
+    "dadyacrypto,nft13onton,directorpodarkov"
 )
 CHANNELS = [
     x.strip().lstrip("@")
