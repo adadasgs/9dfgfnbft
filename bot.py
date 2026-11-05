@@ -128,20 +128,17 @@ async def publish_profile(user, gifts):
         return False
 
     identity = (
-        (f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n' if username else "🔗 Telegram: username не указан в объявлении\n")
+        f'🔗 Профиль продавца: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\\n'
         + (f"🆔 Telegram ID: <code>{telegram_id}</code>" if telegram_id else "🆔 Telegram ID: источник не предоставил")
     )
     price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
-    source_note = (
-        f"Источник: <a href=\"https://t.me/{escape(source.split('/')[-1])}\">{escape(source)}</a>. "
-        "Username указан в публичном объявлении."
-        if source else "Username указан в публичном объявлении."
-    )
+    reputation = "⭐ Рейтинг: открытый источник не предоставляет\\n📝 Отзывы: открытый источник не предоставляет"
     text = (
-        "🎁 <b>Найдено публичное объявление о Telegram-подарке</b>\n\n"
-        f"👤 Продавец: {escape(name)}\n{identity}\n"
-        f"🧩 Объявлений: <b>{len(gifts)}</b>\n{price_text}\n\n"
-        f"<b>Публичное объявление:</b>\n{summary}\n\n{source_note}"
+        "🎁 <b>Найден продавец Telegram-подарка</b>\\n\\n"
+        f"👤 Продавец: {escape(name)}\\n{identity}\\n"
+        f"{reputation}\\n"
+        f"🧩 Подарков в объявлении: <b>{len(gifts)}</b>\\n{price_text}\\n\\n"
+        f"<b>Лот:</b>\\n{summary}"
     )
     topics = await db.get_forum_topics()
     kwargs = {
@@ -162,7 +159,7 @@ async def publish_profile(user, gifts):
 async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
-        "Проверяет публичные Telegram-каналы и группы с объявлениями о подарках. "
+        "Ищет публичные объявления о Telegram-подарках и публикует карточки только если найден username продавца. "
         "Публикует только подтверждённый в объявлении @username и цену в GRAM. "
         "Для дополнительной ручной проверки доступны ChatCrawler и Gift Explore. "
         "Кошельки и TON-адреса не используются."
