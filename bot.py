@@ -82,6 +82,7 @@ def profile_keyboard(user_id, username, listing_url=None):
     return InlineKeyboardMarkup(inline_keyboard=[
         [open_button, InlineKeyboardButton(text="📌 Занять", callback_data=f"reserve:{user_id}")],
         [InlineKeyboardButton(text="📋 Лог", callback_data=f"log:{user_id}"), seller_button],
+        [InlineKeyboardButton(text="🌐 Проверить профиль в ChatCrawler", url="https://app.chatcrawler.app/")],
     ])
 
 
@@ -226,10 +227,13 @@ async def sources_command(message: Message):
     ])
     await message.answer(
         "<b>Источники дополнительной проверки</b>\n\n"
-        "• ChatCrawler — бесплатный поиск по открытым Telegram-постам и профилям авторов.\n"
-        "• Gift Explore — поиск подарков, история цен и поиск владельцев; бесплатные запросы ограничены.\n\n"
-        "Сервисы открываются отдельно: подтверждённого публичного API для автоматического "
-        "получения их результатов не найдено. Бот не будет выдавать имя канала или кошелёк за username продавца.",
+        "• ChatCrawler — бесплатный поиск по публичным Telegram-постам и карточкам авторов.\n"
+        "• Gift Explore — дополнительный поиск подарков.\n\n"
+        "В карточках продавцов добавлена кнопка проверки в ChatCrawler. Откройте сервис и введите "
+        "указанный @username: он покажет доступную публичную статистику, историю юзернейма и площадки, "
+        "где автор писал.\n\n"
+        "Автоматический импорт результатов ChatCrawler пока недоступен: сервис не публикует API или "
+        "массовую выгрузку профилей. Поэтому бот не подделывает рейтинг, отзывы или Telegram ID.",
         reply_markup=keyboard,
     )
 
