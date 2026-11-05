@@ -60,8 +60,11 @@ def profile_keyboard(user_id, username):
     if username:
         rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", url=f"https://t.me/{username}")])
         rows.append([
-            InlineKeyboardButton(text="🔎 ChatCrawler", url="https://chatcrawler.app/"),
+            InlineKeyboardButton(text="🔎 ChatCrawler профиль", url="https://chatcrawler.app/c/gifts/people"),
             InlineKeyboardButton(text="🎁 Gift Explore", url="https://t.me/GiftExploreBot"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="🛍 Лоты ChatCrawler", url="https://chatcrawler.app/c/gifts/listings"),
         ])
     else:
         rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", callback_data=f"no_contact:{user_id}")])
@@ -212,7 +215,8 @@ async def topics_command(message: Message):
 @dp.message(Command("sources"))
 async def sources_command(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔎 ChatCrawler — поиск профилей", url="https://chatcrawler.app/")],
+        [InlineKeyboardButton(text="🔎 ChatCrawler — поиск профилей", url="https://chatcrawler.app/c/gifts/people")],
+        [InlineKeyboardButton(text="🛍 ChatCrawler — подарки на продаже", url="https://chatcrawler.app/c/gifts/listings")],
         [InlineKeyboardButton(text="🎁 Gift Explore — поиск подарков", url="https://t.me/GiftExploreBot")],
     ])
     await message.answer(
