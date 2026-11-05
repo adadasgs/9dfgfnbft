@@ -20,6 +20,7 @@ class ProfileScanner:
         self.session = None
         self._last_request = 0.0
         self.api_key = os.getenv("TONCENTER_API_KEY", "").strip()
+        self.last_stats = {}
 
     async def start(self):
         timeout = aiohttp.ClientTimeout(total=25, connect=10)
@@ -123,11 +124,13 @@ class ProfileScanner:
             },
         )
         items = payload.get("nft_items") or []
+        self.last_stats = {"items": len(items), "on_sale": 0, "sales_checked": 0}
         log.info("TON index returned %s NFT items", len(items))
 
         for item in items:
             if not item.get("on_sale"):
                 continue
+            self.last_stats["on_sale"] += 1
             sale_address = self._address(item.get("sale_contract_address") or item.get("auction_contract_address"))
             nft_address = self._address(item.get("address"))
             if not sale_address or not nft_address:
@@ -135,6 +138,7 @@ class ProfileScanner:
 
             try:
                 sale_payload = await self._get("/nft/sales", {"address": sale_address})
+                self.last_stats["sales_checked"] += 1
                 sales = sale_payload.get("nft_sales") or []
                 if not sales:
                     continue
