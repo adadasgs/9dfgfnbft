@@ -28,6 +28,10 @@ async def init_db():
             result TEXT,
             scanned_at TEXT NOT NULL
         )""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS forum_topics (
+            category TEXT PRIMARY KEY,
+            thread_id INTEGER NOT NULL
+        )""")
         await db.commit()
 
 async def get_profile(user_id):
@@ -83,3 +87,18 @@ async def get_log(user_id):
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM scan_log WHERE user_id=? ORDER BY id DESC LIMIT 15", (user_id,))
         return [dict(x) for x in await cur.fetchall()]
+
+
+async def get_forum_topics():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT category, thread_id FROM forum_topics")
+        return {row[0]: row[1] for row in await cur.fetchall()}
+
+async def save_forum_topic(category, thread_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO forum_topics(category, thread_id) VALUES(?, ?) "
+            "ON CONFLICT(category) DO UPDATE SET thread_id=excluded.thread_id",
+            (category, thread_id)
+        )
+        await db.commit()
