@@ -159,10 +159,9 @@ async def publish_profile(user, gifts):
 async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
-        "Автоматически ищет публичные объявления о Telegram-подарках, включая маркетплейс ChatCrawler, и проверяет username продавца по его публичному профилю. "
-        "Публикует карточки только если найден явный контакт продавца. "
-        "Для дополнительной ручной проверки доступны ChatCrawler и Gift Explore. "
-        "Кошельки и TON-адреса не используются."
+        "Сканирование Telegram-каналов отключено: они давали посты каналов вместо базы продавцов. "
+        "Автоматическая публикация включается только для сайтов, которые отдают одновременно лот и подтверждённый Telegram username продавца. "
+        "ChatCrawler пока не предоставляет массовую выгрузку профилей, а открытые ленты крупных маркетов скрывают чужие usernames."
     )
 
 
@@ -185,17 +184,13 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
-            f"ChatCrawler: лотов просмотрено {stats.get('chatcrawler_listings_seen', 0)}; профилей проверено {stats.get('chatcrawler_profiles_checked', 0)}; с username {stats.get('chatcrawler_with_username', 0)}; без username {stats.get('chatcrawler_without_username', 0)}\n"
-            f"Каналов в списке: {stats.get('channels_total', 0)}\n"
-            f"Проверено каналов: {stats.get('channels_checked', 0)}\n"
-            f"Недоступно каналов: {stats.get('channels_unavailable', 0)}\n"
-            f"Проверено постов: {stats.get('posts_checked', 0)}\n"
-            f"Постов о подарках: {stats.get('gift_posts', 0)}\n"
-            f"Постов с контактом продавца: {stats.get('seller_contacts', 0)}\n"
-            f"Контактов с ценой в GRAM: {stats.get('with_username_and_price', 0)}\n"
-            f"Подходящих объявлений: {count}\n"
-            f"Новых карточек в группе: {published}\n"
-            f"Уже опубликовано ранее: {duplicates}"
+            f"Источники-сайты проверены: {stats.get('website_sources_checked', 0)}\n"
+            f"Недоступно источников: {stats.get('website_sources_unavailable', 0)}\n"
+            f"Подтверждённых username продавцов: {stats.get('profiles_with_verified_username', 0)}\n"
+            f"Сканирование каналов: отключено\n"
+            f"Новых карточек: {published}\n"
+            f"Повторных карточек: {duplicates}\n\n"
+            f"Причина: {escape(stats.get('reason', 'нет данных'))}"
         )
         await status.edit_text("✅ <b>Проверка завершена</b>\n\n" + details)
     except Exception as exc:
@@ -226,11 +221,12 @@ async def sources_command(message: Message):
         [InlineKeyboardButton(text="🎁 Gift Explore — поиск подарков", url="https://t.me/giftexplorebot")],
     ])
     await message.answer(
-        "<b>Источники дополнительной проверки</b>\n\n"
-        "• ChatCrawler — дополнительный поиск по открытым Telegram-постам и профилям авторов.\n"
-        "• Gift Explore — дополнительный поиск подарков.\n\n"
-        "Сервисы открываются отдельно: автоматический импорт результатов ChatCrawler пока не подключён. "
-        "Бот не будет выдавать имя канала или кошелёк за username продавца.",
+        "<b>Проверка источников</b>\n\n"
+        "• ChatCrawler — публичный поиск по одному запросу; массовой выгрузки профилей нет.\n"
+        "• Tonnel — публичная лента подарков скрывает username и ID участников.\n"
+        "• Portals — API требует ключ, а чужие ID пользователей не возвращаются.\n"
+        "• GiftChecker — показывает пользовательские объявления, но открытый API с полем seller username не подтверждён.\n\n"
+        "Каналы отключены. Неподтверждённые аккаунты не публикуются.",
         reply_markup=keyboard,
     )
 
@@ -239,7 +235,7 @@ async def sources_command(message: Message):
 async def status_command(message: Message):
     if scanner is not None:
         await message.answer(
-            f"🟢 Сканер ChatCrawler + публичных Telegram-объявлений подключён. Интервал: {SCAN_INTERVAL} сек."
+            "🟡 Сканирование каналов отключено. Автопубликация с сайтов включается только после подтверждения открытого источника с username продавца."
         )
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
