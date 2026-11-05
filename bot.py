@@ -185,7 +185,8 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
-            f"ChatCrawler: лотов просмотрено {stats.get('chatcrawler_listings_seen', 0)}; профилей проверено {stats.get('chatcrawler_profiles_checked', 0)}; с username {stats.get('chatcrawler_with_username', 0)}; без username {stats.get('chatcrawler_without_username', 0)}\n"\n            f"Каналов в списке: {stats.get('channels_total', 0)}\n"
+            f"ChatCrawler: лотов просмотрено {stats.get('chatcrawler_listings_seen', 0)}; профилей проверено {stats.get('chatcrawler_profiles_checked', 0)}; с username {stats.get('chatcrawler_with_username', 0)}; без username {stats.get('chatcrawler_without_username', 0)}\n"
+            f"Каналов в списке: {stats.get('channels_total', 0)}\n"
             f"Проверено каналов: {stats.get('channels_checked', 0)}\n"
             f"Недоступно каналов: {stats.get('channels_unavailable', 0)}\n"
             f"Проверено постов: {stats.get('posts_checked', 0)}\n"
