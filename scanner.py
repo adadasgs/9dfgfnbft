@@ -26,10 +26,16 @@ WEBSITE_SOURCES = (
 WEB_SEARCH_QUERIES = (
     '"Telegram gift" "seller" "@username" -t.me',
     '"Telegram gifts" "contact seller" -t.me',
+    '"NFT gift" "seller contact" Telegram -site:t.me',
+    '"Telegram collectible gift" seller username -site:t.me',
     '"подарок" "продавец" "t.me/" -site:t.me',
     'site:fragment.com "Telegram gift" seller',
-    'site:tonnel.network gift seller Telegram',
+    'site:getgems.io gift seller Telegram',
     'site:mrkt.com Telegram gift seller',
+    'site:browse.tg Telegram gift seller',
+    'site:peek.tg Telegram gift seller',
+    'site:marketapp.ws Telegram gift seller',
+    'site:giftswatchdata.com Telegram gift seller',
 )
 SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "50")), 100))
 REQUEST_INTERVAL = 1.1
@@ -240,7 +246,7 @@ class ProfileScanner:
 
     async def _search_public_web(self):
         """Search multiple public indexes and inspect public marketplace pages."""
-        from urllib.parse import quote_plus, urlparse, unquote
+        from urllib.parse import quote_plus, urlparse, unquote, parse_qs
 
         seller_re = re.compile(
             r"(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца|написать продавцу)"
@@ -262,7 +268,13 @@ class ProfileScanner:
         seen = set()
 
         async def inspect_result(title, snippet, link):
-            host = (urlparse(link).hostname or "").lower()
+            parsed = urlparse(link)
+            if parsed.hostname and "duckduckgo.com" in parsed.hostname:
+                wrapped = parse_qs(parsed.query).get("uddg", [])
+                if wrapped:
+                    link = unquote(wrapped[0])
+                    parsed = urlparse(link)
+            host = (parsed.hostname or "").lower()
             if not link.startswith("https://") or not any(
                 host == domain or host.endswith("." + domain) for domain in allowed_hosts
             ):
@@ -353,7 +365,7 @@ class ProfileScanner:
                         parser = SearchResultParser()
                         parser.feed(raw or "")
                         results = [
-                            (x["title"], " ".join(x["snippet"]), unquote(x["url"]))
+                            (x["title"], " ".join(x["snippet"]), x["url"])
                             for x in parser.results if x.get("url")
                         ]
                     else:
