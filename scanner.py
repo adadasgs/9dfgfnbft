@@ -50,8 +50,8 @@ SELLER_CUE = re.compile(
 )
 SUPPORTED_LANGUAGE_RE = re.compile(r"[А-Яа-яЁё]{2,}|[A-Za-z]{3,}|[\u3400-\u9fff]{1,}")
 HIGH_RATING_RE = re.compile(
-    r"(?:rating|seller rating|рейтинг|信誉|信用分)\\s*[:：=]?\\s*(100|9[0-9]|8[0-9])"
-    r"(?:\\s*/\\s*100|\\s*%)?",
+    r"(?:rating|seller rating|рейтинг|信誉|信用分)\s*[:：=]?\s*(100|9[0-9]|8[0-9])"
+    r"(?:\s*/\s*100|\s*%)?",
     re.I,
 )
 PRICE_RE = re.compile(
@@ -172,7 +172,7 @@ class ProfileScanner:
         # Require an explicit seller/contact cue in Russian, English or Chinese.
         contact_pattern = re.compile(
             r"(?:продавец|контакт|пишите|писать|связь|seller|contact|"
-            r"message me|dm me|contact me|по вопросам|обращаться|"
+            r"message me|dm me|contact me|\\bdm\\b|по вопросам|обращаться|"
             r"для покупки|вопросы|联系我|卖家|联系|私聊|找我)"
             r"\s*(?:мне\s*)?(?:[:：=—-]\s*)?"
             r"(?:в\s+(?:личку|лс|личные сообщения)\s*)?"
