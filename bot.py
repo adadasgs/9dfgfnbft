@@ -161,14 +161,14 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
-            f"Получено NFT: {stats.get('items', '—')}\n"
-            f"Помечено на продаже: {stats.get('on_sale', '—')}\n"
-            f"Проверено объявлений: {stats.get('sales_checked', '—')}\n"
-            f"Подходящих с ценой и владельцем: {count}\\n"
-            f"Новых карточек в группе: {published}\\n"
+            f"Получено NFT: {stats.get('items', 0)}\n"
+            f"Обнаружено контрактов продажи: {stats.get('on_sale', 0)}\n"
+            f"Проверено объявлений: {stats.get('sales_checked', 0)}\n"
+            f"Подходящих с ценой и владельцем: {count}\n"
+            f"Новых карточек в группе: {published}\n"
             f"Уже опубликовано ранее: {duplicates}"
         )
-        await status.edit_text("✅ <b>Проверка завершена</b>\\n\\n" + details)
+        await status.edit_text("✅ <b>Проверка завершена</b>\n\n" + details)
     except Exception as exc:
         log.exception("Manual /scan failed")
         await status.edit_text("❌ <b>Ошибка сканирования</b>\\n<code>" + escape(str(exc))[:1200] + "</code>\\n\\nПодробности смотри в Render → Logs.")
