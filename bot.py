@@ -89,7 +89,6 @@ async def publish_profile(user, gifts):
     user_id = int(user.id)
     username = getattr(user, "username", None)
     price = getattr(user, "price_ton", None)  # legacy field; scanner stores GRAM here
-    telegram_id = getattr(user, "telegram_id", None)
     source = getattr(user, "source", None)
     # Distribute every detected gift listing across the five forum topics.
     # The listing key is stable, so retries go to the same topic.
@@ -127,10 +126,7 @@ async def publish_profile(user, gifts):
         await db.log_scan(user_id, username, "Повторная проверка публичного объявления")
         return False
 
-    identity = (
-        f'🔗 Профиль продавца: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n'
-        + (f"🆔 Telegram ID: <code>{telegram_id}</code>" if telegram_id else "🆔 Telegram ID: источник не предоставил")
-    )
+    identity = f'🔗 Профиль продавца: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>'
     price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
     reputation = "⭐ Рейтинг: открытый источник не предоставляет\n📝 Отзывы: открытый источник не предоставляет"
     text = (
