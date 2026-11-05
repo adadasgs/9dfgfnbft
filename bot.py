@@ -129,6 +129,19 @@ async def scan_command(message: Message):
     await message.answer(f"Готово. Найдено профилей с NFT-подарками: {count}.")
 
 
+@dp.message(Command("topics"))
+async def topics_command(message: Message):
+    try:
+        created = await ensure_forum_topics()
+        saved = await db.get_forum_topics()
+        lines = [f"• {title}: {saved.get(key, 'нет')}" for key, title in CATEGORIES]
+        status = "Созданы темы: " + ", ".join(created) if created else "Все пять тем уже созданы."
+        await message.answer(status + "\\n\\n" + "\\n".join(lines))
+    except Exception as exc:
+        log.exception("Forum topic setup failed")
+        await message.answer("Не удалось создать темы. Дайте боту права администратора и право «Управление темами».\\nПричина: " + escape(str(exc)))
+
+
 @dp.message(Command("status"))
 async def status_command(message: Message):
     if scanner is not None:
@@ -210,6 +223,10 @@ async def main():
     if not DESTINATION_CHAT_ID:
         raise RuntimeError("DESTINATION_CHAT_ID is missing")
     await db.init_db()
+    try:
+        await ensure_forum_topics()
+    except Exception:
+        log.exception("Forum topic creation failed; check forum mode and bot permissions")
     task = asyncio.create_task(scanner_loop())
     try:
         await dp.start_polling(bot)
