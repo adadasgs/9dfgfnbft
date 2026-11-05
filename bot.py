@@ -170,7 +170,7 @@ async def scan_command(message: Message):
     if scanner is None:
         await message.answer("❌ Сканер не подключён.\n" + escape(scanner_error))
         return
-    status = await message.answer("🔎 Проверяю публичные Telegram-объявления о подарках…")
+    status = await message.answer("🔎 Проверяю подтверждённые сайты с объявлениями и username продавцов…")
     try:
         count = 0
         published = 0
@@ -222,7 +222,7 @@ async def sources_command(message: Message):
     ])
     await message.answer(
         "<b>Проверка источников</b>\n\n"
-        "• ChatCrawler — публичный поиск по одному запросу; массовой выгрузки профилей нет.\n"
+        "• ChatCrawler — поиск по публичным Telegram-постам; массовой выгрузки профилей нет, поэтому он не используется как автоматический поток.\n"
         "• Tonnel — публичная лента подарков скрывает username и ID участников.\n"
         "• Portals — API требует ключ, а чужие ID пользователей не возвращаются.\n"
         "• GiftChecker — показывает пользовательские объявления, но открытый API с полем seller username не подтверждён.\n\n"
