@@ -99,6 +99,8 @@ class ProfileScanner:
 
     def __init__(self):
         self.session = None
+        self.mtproto = None
+        self.mtproto_error = ""
         self._last_request = 0.0
         self.last_stats = {}
 
@@ -111,11 +113,37 @@ class ProfileScanner:
                 "Accept": "text/html,application/xhtml+xml",
             },
         )
+        api_id = os.getenv("API_ID", "").strip()
+        api_hash = os.getenv("API_HASH", "").strip()
+        session_string = os.getenv("SESSION_STRING", "").strip()
+        if api_id and api_hash and session_string:
+            try:
+                from telethon import TelegramClient
+                from telethon.sessions import StringSession
+                self.mtproto = TelegramClient(StringSession(session_string), int(api_id), api_hash)
+                await self.mtproto.connect()
+                if not await self.mtproto.is_user_authorized():
+                    raise RuntimeError("SESSION_STRING не авторизован")
+                log.info("Telegram resale profile parser connected")
+            except Exception as exc:
+                self.mtproto_error = str(exc)
+                log.warning("Telegram resale parser unavailable: %s", exc)
+                if self.mtproto:
+                    try:
+                        await self.mtproto.disconnect()
+                    except Exception:
+                        pass
+                self.mtproto = None
+        else:
+            self.mtproto_error = "Нужны API_ID, API_HASH и SESSION_STRING для сканирования профилей"
 
     async def stop(self):
         if self.session and not self.session.closed:
             await self.session.close()
         self.session = None
+        if self.mtproto:
+            await self.mtproto.disconnect()
+        self.mtproto = None
 
     async def _get(self, url):
         if self.session is None:
@@ -221,6 +249,95 @@ class ProfileScanner:
         digest = hashlib.sha256(f"{channel}/{post_id}".encode()).hexdigest()[:15]
         return -(int(digest, 16) or 1)
 
+
+    @staticmethod
+    def _stars_price(value):
+        if not value:
+            return None
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+        if value is None:
+            return None
+        amount = getattr(value, "amount", None)
+        nanos = getattr(value, "nanos", 0) or 0
+        if amount is None:
+            return None
+        try:
+            return float(amount) + float(nanos) / 1_000_000_000
+        except (TypeError, ValueError):
+            return None
+
+    async def scan_mtproto_once(self):
+        """Read Telegram's public Stars resale listings and resolve only user sellers."""
+        if self.mtproto is None:
+            return
+        from telethon.tl import functions
+
+        try:
+            catalog = await self.mtproto(functions.payments.GetStarGiftsRequest(hash=0))
+            for gift_type in getattr(catalog, "gifts", []):
+                if not getattr(gift_type, "availability_resale", 0):
+                    continue
+                offset = ""
+                for _page in range(3):
+                    result = await self.mtproto(
+                        functions.payments.GetResaleStarGiftsRequest(
+                            stars_only=True,
+                            gift_id=gift_type.id,
+                            offset=offset,
+                            limit=100,
+                        )
+                    )
+                    users = {
+                        item.id: item
+                        for item in getattr(result, "users", [])
+                        if getattr(item, "id", None) is not None
+                    }
+                    for listing in getattr(result, "gifts", []):
+                        owner_peer = getattr(listing, "owner_id", None)
+                        owner_id = getattr(owner_peer, "user_id", None)
+                        if not owner_id:
+                            continue  # Ignore channels and wallet-only owners.
+                        seller = users.get(owner_id)
+                        if seller is None:
+                            try:
+                                seller = await self.mtproto.get_entity(owner_peer)
+                            except Exception:
+                                continue
+                        username = getattr(seller, "username", None)
+                        if not username or getattr(seller, "bot", False):
+                            continue
+                        slug = getattr(listing, "slug", None)
+                        if not slug:
+                            continue
+                        listing_url = f"https://t.me/nft/{slug}"
+                        price = self._stars_price(getattr(listing, "resell_amount", None))
+                        user = SimpleNamespace(
+                            id=self._internal_id("telegram-stars-resale", slug),
+                            username=username,
+                            first_name=getattr(seller, "first_name", None),
+                            last_name=getattr(seller, "last_name", None),
+                            telegram_id=None,
+                            price_ton=price,
+                            price_currency="XTR",
+                            source=None,
+                            listing_url=listing_url,
+                        )
+                        gift_title = getattr(listing, "title", None) or getattr(gift_type, "title", None) or "Telegram Gift"
+                        gift_num = getattr(listing, "num", None)
+                        label = f"{gift_title} #{gift_num}" if gift_num is not None else gift_title
+                        gift = SimpleNamespace(title=label, url=listing_url)
+                        yield user, [gift]
+                    offset = getattr(result, "next_offset", None) or ""
+                    if not offset:
+                        break
+                    await asyncio.sleep(0.4)
+                await asyncio.sleep(0.4)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("Telegram Stars resale profile scan failed: %s", exc)
+
     async def scan_once(self):
         """Read website pages only; never scan Telegram channels.
 
@@ -248,6 +365,10 @@ class ProfileScanner:
             r"(gift|gifts|telegram gift|подарок|подарки|collectible|nft)",
             re.I,
         )
+        # Primary new method: Telegram's own public resale feed, Stars only (no TON).
+        async for user, gifts in self.scan_mtproto_once():
+            yield user, gifts
+
         for source_name, base_url in WEBSITE_SOURCES:
             self.last_stats["websites_checked"] += 1
             try:
