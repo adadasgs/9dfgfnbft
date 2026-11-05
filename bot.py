@@ -159,7 +159,7 @@ async def publish_profile(user, gifts):
 async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
-        "Автоматически ищет публичные объявления о Telegram-подарках на русском, английском и китайском языках. "
+        "Автоматически ищет публичные объявления о Telegram-подарках, включая маркетплейс ChatCrawler, и проверяет username продавца по его публичному профилю. "
         "Публикует карточки только если найден явный контакт продавца. "
         "Для дополнительной ручной проверки доступны ChatCrawler и Gift Explore. "
         "Кошельки и TON-адреса не используются."
@@ -185,7 +185,7 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
-            f"Каналов в списке: {stats.get('channels_total', 0)}\n"
+            f"ChatCrawler: лотов просмотрено {stats.get('chatcrawler_listings_seen', 0)}; профилей проверено {stats.get('chatcrawler_profiles_checked', 0)}; с username {stats.get('chatcrawler_with_username', 0)}; без username {stats.get('chatcrawler_without_username', 0)}\n"\n            f"Каналов в списке: {stats.get('channels_total', 0)}\n"
             f"Проверено каналов: {stats.get('channels_checked', 0)}\n"
             f"Недоступно каналов: {stats.get('channels_unavailable', 0)}\n"
             f"Проверено постов: {stats.get('posts_checked', 0)}\n"
@@ -238,7 +238,7 @@ async def sources_command(message: Message):
 async def status_command(message: Message):
     if scanner is not None:
         await message.answer(
-            f"🟢 Сканер публичных Telegram-объявлений подключён. Интервал: {SCAN_INTERVAL} сек."
+            f"🟢 Сканер ChatCrawler + публичных Telegram-объявлений подключён. Интервал: {SCAN_INTERVAL} сек."
         )
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
