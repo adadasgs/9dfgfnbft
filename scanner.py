@@ -39,6 +39,12 @@ SELLER_CUE = re.compile(
     r"предложение|продам|продаю|продаётся|продается)",
     re.I,
 )
+RUSSIAN_TEXT_RE = re.compile(
+    r"[А-Яа-яЁё]{3,}|"
+    r"(продам|продаю|продаётся|продается|куплю|покупка|продавец|"
+    r"подарок|подарки|обмен|цена|рублей|руб\.?|связь|пишите)",
+    re.I,
+)
 PRICE_RE = re.compile(
     r"(\d+(?:[.,]\d+)?)\s*(?:gram|grams|грам(?:м|ма|мов)?|гр\.?)(?!\w)",
     re.I,
@@ -220,6 +226,7 @@ class ProfileScanner:
             "gift_posts": 0,
             "seller_contacts": 0,
             "ignored_without_seller": 0,
+            "ignored_non_russian": 0,
             "with_gram_price": 0,
             "with_username_and_price": 0,
         }
@@ -235,6 +242,10 @@ class ProfileScanner:
                     if not GIFT_WORDS.search(text):
                         continue
                     self.last_stats["gift_posts"] += 1
+                    # Russian-first mode: ignore listings without Russian-language text.
+                    if not RUSSIAN_TEXT_RE.search(text):
+                        self.last_stats["ignored_non_russian"] += 1
+                        continue
                     username = self._username(text, anchors, post_channel)
                     if username:
                         self.last_stats["seller_contacts"] += 1
