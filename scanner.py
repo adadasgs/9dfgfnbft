@@ -115,6 +115,8 @@ class ProfileScanner:
         return -(number or 1)
 
     async def scan_once(self):
+        # Keep useful counters even when the API request fails.
+        self.last_stats = {"items": 0, "on_sale": 0, "sales_checked": 0, "error": None}
         payload = await self._get(
             "/nft/items",
             {
@@ -123,18 +125,27 @@ class ProfileScanner:
                 "sort_by_last_transaction_lt": "true",
             },
         )
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Unexpected TON Center response: {type(payload).__name__}")
         items = payload.get("nft_items") or []
-        self.last_stats = {"items": len(items), "on_sale": 0, "sales_checked": 0}
-        log.info("TON index returned %s NFT items", len(items))
+        if not isinstance(items, list):
+            raise RuntimeError("TON Center response has no nft_items array")
+        self.last_stats["items"] = len(items)
+        log.info("TON index returned %s NFT items; response keys=%s", len(items), list(payload.keys()))
 
         for item in items:
-            if not item.get("on_sale"):
-                continue
-            self.last_stats["on_sale"] += 1
-            sale_address = self._address(item.get("sale_contract_address") or item.get("auction_contract_address"))
+            # API v3 item responses may omit the convenience on_sale flag.
+            # A sale/auction contract address is the reliable indication to inspect.
+            sale_info = item.get("sale") or item.get("auction") or {}
+            sale_address = self._address(
+                item.get("sale_contract_address")
+                or item.get("auction_contract_address")
+                or (sale_info.get("address") if isinstance(sale_info, dict) else None)
+            )
             nft_address = self._address(item.get("address"))
             if not sale_address or not nft_address:
                 continue
+            self.last_stats["on_sale"] += 1
 
             try:
                 sale_payload = await self._get("/nft/sales", {"address": sale_address})
