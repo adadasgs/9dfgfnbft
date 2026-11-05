@@ -4,6 +4,8 @@ import html
 import logging
 import os
 import re
+import urllib.parse
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from types import SimpleNamespace
 
@@ -14,7 +16,20 @@ log = logging.getLogger("profile-radar")
 # Website-only sources. Telegram channel scraping is intentionally disabled.
 WEBSITE_SOURCES = (
     ("Gifts.wtf", "https://gifts.wtf/"),
+    ("TG Gifts", "https://tggifts.com/"),
     ("GiftChecker", "https://giftcheckertg.com/"),
+)
+
+# Public web-index discovery. Queries target standalone marketplace/listing pages,
+# not Telegram channels or group previews. Search snippets are leads only: a
+# username is emitted only when the snippet explicitly labels it as seller/contact.
+WEB_SEARCH_QUERIES = (
+    '"Telegram gift" "seller" "@username" -t.me',
+    '"Telegram gifts" "contact seller" -t.me',
+    '"подарок" "продавец" "t.me/" -site:t.me',
+    'site:fragment.com "Telegram gift" seller',
+    'site:tonnel.network gift seller Telegram',
+    'site:mrkt.com Telegram gift seller',
 )
 SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "50")), 100))
 REQUEST_INTERVAL = 1.1
@@ -223,6 +238,66 @@ class ProfileScanner:
         return -(int(digest, 16) or 1)
 
 
+    async def _search_public_web(self):
+        """Search indexed public listing pages; never open Telegram channels."""
+        import xml.etree.ElementTree as ET
+        from urllib.parse import quote_plus, urlparse
+
+        seller_re = re.compile(
+            r"(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца|написать продавцу)"
+            r"\\s*[:：=—-]?\\s*(?:https?://)?t\\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
+            r"|(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца)"
+            r"\\s*[:：=—-]?\\s*@([A-Za-z][A-Za-z0-9_]{4,31})",
+            re.I,
+        )
+        gift_re = re.compile(r"(gift|gifts|подарок|подарки|collectible|nft)", re.I)
+        seen = set()
+        for query in WEB_SEARCH_QUERIES:
+            try:
+                url = "https://www.bing.com/search?format=rss&q=" + quote_plus(query)
+                raw = await self._get(url)
+                if not raw:
+                    continue
+                root = ET.fromstring(raw)
+                for item in root.findall(".//item"):
+                    title = item.findtext("title") or ""
+                    description = item.findtext("description") or ""
+                    link = item.findtext("link") or ""
+                    host = (urlparse(link).hostname or "").lower()
+                    if not link.startswith("https://") or host in {"t.me", "telegram.me", "www.t.me"}:
+                        continue
+                    if not any(domain in host for domain in (
+                        "fragment.com", "gifts.wtf", "tggifts.com",
+                        "tonnel.network", "mrkt.com", "getgems.io",
+                    )):
+                        continue
+                    snippet = html.unescape(re.sub(r"<[^>]+>", " ", title + " " + description))
+                    if not gift_re.search(snippet):
+                        continue
+                    handles = {next((g for g in m.groups() if g), None) for m in seller_re.finditer(snippet)}
+                    handles.discard(None)
+                    if len(handles) != 1:
+                        continue
+                    username = next(iter(handles))
+                    if username.lower().endswith("_bot") or username.lower() in RESERVED_HANDLES:
+                        continue
+                    key = (username.lower(), link)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    internal_id = self._internal_id("web-search", link)
+                    user = SimpleNamespace(
+                        id=internal_id, username=username, first_name=None,
+                        last_name=None, telegram_id=None, price_ton=None,
+                        source=None, listing_url=link,
+                    )
+                    gift = SimpleNamespace(title=title[:180] or "Telegram gift listing", url=link)
+                    yield user, [gift]
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug("Public web search failed for %r: %s", query, exc)
+
     async def scan_once(self):
         """Read public website pages only; no personal Telegram API/auth.
 
@@ -250,6 +325,11 @@ class ProfileScanner:
             r"(gift|gifts|telegram gift|подарок|подарки|collectible|nft)",
             re.I,
         )
+        async for user, gifts in self._search_public_web():
+            self.last_stats["listing_pages_with_seller"] += 1
+            self.last_stats["profiles_with_verified_username"] += 1
+            yield user, gifts
+
         for source_name, base_url in WEBSITE_SOURCES:
             self.last_stats["websites_checked"] += 1
             try:
