@@ -22,11 +22,11 @@ DESTINATION_CHAT_ID = int(os.getenv("DESTINATION_CHAT_ID", "0"))
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "900"))
 
 CATEGORIES = [
-    ("under5", "До 5 TON"),
-    ("5_15", "5–15 TON"),
-    ("15_27_5", "15–27.5 TON"),
-    ("27_5_60", "27.5–60 TON"),
-    ("over60", "60+ TON"),
+    ("under5", "До 5 GRAM"),
+    ("5_15", "5–15 GRAM"),
+    ("15_27_5", "15–27.5 GRAM"),
+    ("27_5_60", "27.5–60 GRAM"),
+    ("over60", "60+ GRAM"),
 ]
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -69,6 +69,8 @@ async def publish_profile(user, gifts):
     username = getattr(user, "username", None)
     wallet = getattr(user, "wallet_address", None)
     price = getattr(user, "price_ton", None)
+    telegram_id = getattr(user, "telegram_id", None)
+    source = getattr(user, "source", None)
     category = getattr(user, "category", "unpriced")
     name = " ".join(x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x)
     name = name or "TON wallet"
@@ -92,7 +94,7 @@ async def publish_profile(user, gifts):
         "nft_address": getattr(user, "nft_address", None),
         "listing_url": getattr(user, "listing_url", None),
         "price": price,
-        "price_currency": "TON" if price is not None else None,
+        "price_currency": "GRAM" if price is not None else None,
         "gifts_count": len(gifts),
         "gift_summary": summary,
         "category": category,
@@ -108,15 +110,15 @@ async def publish_profile(user, gifts):
         heading = "💎 <b>Найден NFT-листинг в сети TON</b>"
     else:
         seller = f"👤 Продавец: {escape(name)}"
-        identity = f"🔗 Username: @{escape(username) if username else 'не указан'}\n🆔 Telegram ID: <code>{user_id}</code>"
-        heading = "🎁 <b>Найдены NFT-подарки</b>"
+        identity = (f"🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: <code>{telegram_id}</code>" if telegram_id else f"🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: источник не предоставил")
+        heading = "🎁 <b>Найдено публичное объявление о подарке</b>"
 
-    price_text = f"💎 Цена: <b>{price:.4f} TON</b>" if price is not None else "💎 Цена: неизвестна"
+    price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
     text = (
         f"{heading}\n\n{seller}\n{identity}\n"
         f"🧩 NFT: <b>{len(gifts)}</b>\n{price_text}\n\n"
         f"<b>Объект:</b>\n{summary}\n\n"
-        "ℹ️ Адрес кошелька не подтверждает личность владельца в Telegram."
+        "Источник: публичный пост Telegram; username взят из явно указанного контакта." if source else "Контакт показывается только при наличии подтверждённого username."
     )
     topics = await db.get_forum_topics()
     kwargs = {
@@ -129,7 +131,7 @@ async def publish_profile(user, gifts):
         kwargs["message_thread_id"] = topics[category]
     sent = await bot.send_message(**kwargs)
     await db.attach_message(user_id, DESTINATION_CHAT_ID, sent.message_id)
-    await db.log_scan(user_id, username, f"Опубликован NFT; цена {price} TON")
+    await db.log_scan(user_id, username, f"Опубликовано объявление; цена {price} GRAM")
     return True
 
 
@@ -137,8 +139,7 @@ async def publish_profile(user, gifts):
 async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
-        "Сканирует публичные NFT-листинги TON и показывает адрес кошелька владельца. "
-        "Telegram username и ID указываются только при наличии достоверных данных."
+        "Ищет публичные объявления о Telegram-подарках. Показывает только явно указанный username продавца и цену в GRAM."
     )
 
 
@@ -147,7 +148,7 @@ async def scan_command(message: Message):
     if scanner is None:
         await message.answer("❌ Сканер не подключён.\n" + escape(scanner_error))
         return
-    status = await message.answer("🔎 Проверяю публичные NFT-листинги TON…")
+    status = await message.answer("🔎 Проверяю публичные Telegram-объявления о подарках…")
     try:
         count = 0
         published = 0
@@ -161,9 +162,10 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
-            f"Получено NFT: {stats.get('items', 0)}\n"
-            f"Обнаружено контрактов продажи: {stats.get('on_sale', 0)}\n"
-            f"Проверено объявлений: {stats.get('sales_checked', 0)}\n"
+            f"Проверено каналов: {stats.get('channels_checked', 0)}\n"
+            f"Проверено постов: {stats.get('posts_checked', 0)}\n"
+            f"Постов о подарках: {stats.get('gift_posts', 0)}\n"
+            f"С username и ценой: {stats.get('with_username', 0)}\n"
             f"Подходящих с ценой и владельцем: {count}\n"
             f"Новых карточек в группе: {published}\n"
             f"Уже опубликовано ранее: {duplicates}"
@@ -255,14 +257,14 @@ async def scanner_loop():
                 scanner = ProfileScanner()
                 await scanner.start()
                 scanner_error = ""
-                log.info("Public TON NFT scanner connected")
+                log.info("Public Telegram gift-post scanner connected")
             async for user, gifts in scanner.scan_once():
                 await publish_profile(user, gifts)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             scanner_error = str(exc)
-            log.exception("TON scanner failed")
+            log.exception("Public Telegram scanner failed")
             if scanner is not None:
                 try:
                     await scanner.stop()
