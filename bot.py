@@ -161,9 +161,9 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
-            f"Получено NFT: {stats.get('items', '—')}\\n"
-            f"Помечено на продаже: {stats.get('on_sale', '—')}\\n"
-            f"Проверено объявлений: {stats.get('sales_checked', '—')}\\n"
+            f"Получено NFT: {stats.get('items', '—')}\n"
+            f"Помечено на продаже: {stats.get('on_sale', '—')}\n"
+            f"Проверено объявлений: {stats.get('sales_checked', '—')}\n"
             f"Подходящих с ценой и владельцем: {count}\\n"
             f"Новых карточек в группе: {published}\\n"
             f"Уже опубликовано ранее: {duplicates}"
