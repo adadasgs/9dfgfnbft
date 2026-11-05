@@ -59,7 +59,7 @@ async def ensure_forum_topics(create_missing=False):
                 continue
             except Exception:
                 log.exception("Saved forum topic %s (%s) is unavailable", title, thread_id)
-                await db.delete_forum_topic(key)
+                saved.pop(key, None)
         if create_missing:
             topic = await bot.create_forum_topic(chat_id=DESTINATION_CHAT_ID, name=title)
             thread_id = topic.message_thread_id
