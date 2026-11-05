@@ -239,9 +239,8 @@ class ProfileScanner:
 
 
     async def _search_public_web(self):
-        """Search indexed public listing pages; never open Telegram channels."""
-        import xml.etree.ElementTree as ET
-        from urllib.parse import quote_plus, urlparse
+        """Search multiple public indexes and inspect public marketplace pages."""
+        from urllib.parse import quote_plus, urlparse, unquote
 
         seller_re = re.compile(
             r"(?:seller(?: username| contact)?|contact seller|продавец|контакт продавца|написать продавцу)"
@@ -251,65 +250,130 @@ class ProfileScanner:
             re.I,
         )
         gift_re = re.compile(r"(gift|gifts|подарок|подарки|collectible|nft)", re.I)
-        seen = set()
+        allowed_hosts = (
+            "fragment.com", "getgems.io", "gifts.wtf", "tggifts.com",
+            "giftcheckertg.com", "mrkt.com", "tonnel.network", "browse.tg",
+            "giftswatchdata.com", "marketapp.ws", "peek.tg",
+        )
         self.last_stats.update({
-            "search_queries": 0,
-            "search_results": 0,
-            "gift_results": 0,
-            "seller_matches": 0,
-            "search_errors": 0,
+            "search_queries": 0, "search_results": 0, "gift_results": 0,
+            "seller_matches": 0, "search_errors": 0, "pages_inspected": 0,
         })
-        for query in WEB_SEARCH_QUERIES:
-            self.last_stats["search_queries"] += 1
+        seen = set()
+
+        async def inspect_result(title, snippet, link):
+            host = (urlparse(link).hostname or "").lower()
+            if not link.startswith("https://") or not any(
+                host == domain or host.endswith("." + domain) for domain in allowed_hosts
+            ):
+                return
+            combined = html.unescape(re.sub(r"<[^>]+>", " ", title + " " + snippet))
+            if not gift_re.search(combined):
+                return
+            self.last_stats["gift_results"] += 1
+
+            # Search snippets are not enough: inspect the public listing page itself.
+            page = ""
             try:
-                url = "https://www.bing.com/search?format=rss&q=" + quote_plus(query)
-                raw = await self._get(url)
-                if not raw:
-                    continue
-                root = ET.fromstring(raw)
-                items = root.findall(".//item")
-                self.last_stats["search_results"] += len(items)
-                for item in items:
-                    title = item.findtext("title") or ""
-                    description = item.findtext("description") or ""
-                    link = item.findtext("link") or ""
-                    host = (urlparse(link).hostname or "").lower()
-                    if not link.startswith("https://") or host in {"t.me", "telegram.me", "www.t.me"}:
-                        continue
-                    if not any(domain in host for domain in (
-                        "fragment.com", "gifts.wtf", "tggifts.com",
-                        "tonnel.network", "mrkt.com", "getgems.io",
-                    )):
-                        continue
-                    snippet = html.unescape(re.sub(r"<[^>]+>", " ", title + " " + description))
-                    if not gift_re.search(snippet):
-                        continue
-                    self.last_stats["gift_results"] += 1
-                    handles = {next((g for g in m.groups() if g), None) for m in seller_re.finditer(snippet)}
-                    handles.discard(None)
-                    if len(handles) != 1:
-                        continue
-                    username = next(iter(handles))
-                    self.last_stats["seller_matches"] += 1
-                    if username.lower().endswith("_bot") or username.lower() in RESERVED_HANDLES:
-                        continue
-                    key = (username.lower(), link)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    internal_id = self._internal_id("web-search", link)
-                    user = SimpleNamespace(
-                        id=internal_id, username=username, first_name=None,
-                        last_name=None, telegram_id=None, price_ton=None,
-                        source=None, listing_url=link,
-                    )
-                    gift = SimpleNamespace(title=title[:180] or "Telegram gift listing", url=link)
-                    yield user, [gift]
+                page = await self._get(link)
+                self.last_stats["pages_inspected"] += 1
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.last_stats["search_errors"] += 1
-                log.warning("Public web search failed for %r: %s", query, exc)
+                log.info("Listing page fetch failed (%s): %s", host, exc)
+            source_text = html.unescape(re.sub(r"<[^>]+>", " ", page or ""))
+            source_text = re.sub(r"\s+", " ", source_text)
+            matches = list(seller_re.finditer(source_text))
+            if not matches:
+                matches = list(seller_re.finditer(combined))
+            handles = {
+                next((g for g in m.groups() if g), None)
+                for m in matches
+            }
+            handles.discard(None)
+            if len(handles) != 1:
+                return
+            username = next(iter(handles))
+            self.last_stats["seller_matches"] += 1
+            if username.lower().endswith("_bot") or username.lower() in RESERVED_HANDLES:
+                return
+            # If page is available, require seller/contact wording near the handle.
+            # Snippet-only matches must contain the same explicit wording.
+            evidence = source_text if matches and page else combined
+            if not SELLER_CUE.search(evidence):
+                return
+            key = (username.lower(), link)
+            if key in seen:
+                return
+            seen.add(key)
+            user = SimpleNamespace(
+                id=self._internal_id("public-web", link), username=username,
+                first_name=None, last_name=None, telegram_id=None,
+                price_ton=self._price(evidence), source=None, listing_url=link,
+            )
+            gift = SimpleNamespace(title=title[:180] or "Telegram gift listing", url=link)
+            yield user, [gift]
+
+        class SearchResultParser(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.results = []
+                self.current = None
+                self.capture = None
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                classes = attrs.get("class", "").split()
+                if tag == "a" and ("result__a" in classes or "result-link" in classes):
+                    self.current = {"title": [], "snippet": [], "url": attrs.get("href", "")}
+                    self.capture = "title"
+                elif self.current is not None and "result__snippet" in classes:
+                    self.capture = "snippet"
+
+            def handle_data(self, data):
+                if self.current is not None and self.capture:
+                    self.current[self.capture].append(data)
+
+            def handle_endtag(self, tag):
+                if tag == "a" and self.current is not None and self.capture == "title":
+                    self.capture = None
+                if tag in ("div", "td") and self.current is not None and self.capture == "snippet":
+                    self.capture = None
+                    self.results.append(self.current)
+                    self.current = None
+
+        for query in WEB_SEARCH_QUERIES:
+            # DuckDuckGo HTML and Bing RSS are independent public indexes.
+            for engine in ("duckduckgo", "bing"):
+                self.last_stats["search_queries"] += 1
+                try:
+                    if engine == "duckduckgo":
+                        search_url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
+                        raw = await self._get(search_url)
+                        parser = SearchResultParser()
+                        parser.feed(raw or "")
+                        results = [
+                            (x["title"], " ".join(x["snippet"]), unquote(x["url"]))
+                            for x in parser.results if x.get("url")
+                        ]
+                    else:
+                        search_url = "https://www.bing.com/search?format=rss&q=" + quote_plus(query)
+                        raw = await self._get(search_url)
+                        root = ET.fromstring(raw) if raw else ET.Element("rss")
+                        results = [
+                            (item.findtext("title") or "", item.findtext("description") or "",
+                             item.findtext("link") or "")
+                            for item in root.findall(".//item")
+                        ]
+                    self.last_stats["search_results"] += len(results)
+                    for title, snippet, link in results:
+                        async for record in inspect_result(title, snippet, link):
+                            yield record
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self.last_stats["search_errors"] += 1
+                    log.warning("%s search failed for %r: %s", engine, query, exc)
 
     async def scan_once(self):
         """Read public website pages only; no personal Telegram API/auth.
@@ -328,6 +392,7 @@ class ProfileScanner:
             "gift_results": 0,
             "seller_matches": 0,
             "search_errors": 0,
+            "pages_inspected": 0,
         }
         seen = set()
         seller_cue = re.compile(
