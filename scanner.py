@@ -24,7 +24,9 @@ DEFAULT_CHANNELS = (
     "cryptaad,benzin,CreepyGifts,alishka_gifts,snyalcepik,semenchuk,groza,"
     "loxssy52,ohuenko,PodarokDurova,bape,vices,borov_club,lalyounft,bafet,"
     "DuckLodge,nonstopiiiikk,durovgoyda,mr_tony,digest,roxtalk,zorgannft,"
-    "dadyacrypto,nft13onton,directorpodarkov"
+    "dadyacrypto,nft13onton,directorpodarkov,"
+    "GiftTradeee,TonnelGift,mrktnotification,giftsmarket_starsgram,"
+    "GiftPawn,nft_gifts_chat,vseznayka_otc"
 )
 CHANNELS = [
     x.strip().lstrip("@")
