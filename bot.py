@@ -67,31 +67,35 @@ def profile_keyboard(user_id, username):
 async def publish_profile(user, gifts):
     user_id = int(user.id)
     username = getattr(user, "username", None)
-    wallet = getattr(user, "wallet_address", None)
-    price = getattr(user, "price_ton", None)
+    price = getattr(user, "price_ton", None)  # legacy field; scanner stores GRAM here
     telegram_id = getattr(user, "telegram_id", None)
     source = getattr(user, "source", None)
     category = getattr(user, "category", "unpriced")
-    name = " ".join(x for x in [getattr(user, "first_name", None), getattr(user, "last_name", None)] if x)
-    name = name or "TON wallet"
+    name = " ".join(
+        x for x in [
+            getattr(user, "first_name", None),
+            getattr(user, "last_name", None),
+        ] if x
+    ) or (f"Продавец @{username}" if username else "Продавец")
+
+    # Never publish a card without an explicitly advertised Telegram username.
+    if not username:
+        return False
 
     gift_lines = []
     for gift in gifts[:20]:
-        title = escape(getattr(gift, "title", "TON NFT"))
-        address = getattr(gift, "address", None)
+        title = escape(getattr(gift, "title", "Telegram gift"))
         url = getattr(gift, "url", None)
-        gift_lines.append(f'• <a href="{escape(url)}">{title}</a>' if url else f"• {title}")
-        if address:
-            gift_lines.append(f"  <code>{escape(address)}</code>")
+        gift_lines.append(f'<a href="{escape(url)}">{title}</a>' if url else title)
     summary = "\n".join(gift_lines)
 
     await db.save_profile({
         "user_id": user_id,
         "username": username,
         "display_name": name,
-        "profile_url": f"https://t.me/{username}" if username else None,
-        "wallet_address": wallet,
-        "nft_address": getattr(user, "nft_address", None),
+        "profile_url": f"https://t.me/{username}",
+        "wallet_address": None,
+        "nft_address": None,
         "listing_url": getattr(user, "listing_url", None),
         "price": price,
         "price_currency": "GRAM" if price is not None else None,
@@ -101,25 +105,27 @@ async def publish_profile(user, gifts):
     })
     old = await db.get_profile(user_id)
     if old and old.get("message_id"):
-        await db.log_scan(user_id, username, "Повторная проверка NFT-листинга")
+        await db.log_scan(user_id, username, "Повторная проверка публичного объявления")
         return False
 
-    if wallet:
-        seller = f"👛 Кошелёк владельца: <code>{escape(wallet)}</code>"
-        identity = "🔗 Telegram username: не найден в публичных данных\n🆔 Telegram ID: недоступен из TON-адреса"
-        heading = "💎 <b>Найден NFT-листинг в сети TON</b>"
-    else:
-        seller = f"👤 Продавец: {escape(name)}"
-        identity = (f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: <code>{telegram_id}</code>' if telegram_id else f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n🆔 Telegram ID: источник не предоставил')
-        heading = "🎁 <b>Найдено публичное объявление о подарке</b>"
-
+    identity = (
+        f'🔗 Telegram: <a href="https://t.me/{escape(username)}">@{escape(username)}</a>\n'
+        + (
+            f"🆔 Telegram ID: <code>{telegram_id}</code>"
+            if telegram_id else "🆔 Telegram ID: источник не предоставил"
+        )
+    )
     price_text = f"💎 Цена: <b>{price:g} GRAM</b>" if price is not None else "💎 Цена: неизвестна"
-    source_note = "Источник: публичный пост Telegram; username взят из явно указанного контакта." if source else "Контакт показывается только при наличии подтверждённого username."
+    source_note = (
+        f"Источник: <a href=\"https://t.me/{escape(source.split('/')[-1])}\">{escape(source)}</a>. "
+        "Username указан в публичном объявлении."
+        if source else "Username указан в публичном объявлении."
+    )
     text = (
-        f"{heading}\n\n{seller}\n{identity}\n"
-        f"🧩 Объявление: <b>{len(gifts)}</b>\n{price_text}\n\n"
-        f"<b>Текст объявления:</b>\n{summary}\n\n"
-        f"{source_note}"
+        "🎁 <b>Найдено публичное объявление о Telegram-подарке</b>\n\n"
+        f"👤 Продавец: {escape(name)}\n{identity}\n"
+        f"🧩 Объявлений: <b>{len(gifts)}</b>\n{price_text}\n\n"
+        f"<b>Публичное объявление:</b>\n{summary}\n\n{source_note}"
     )
     topics = await db.get_forum_topics()
     kwargs = {
@@ -140,7 +146,9 @@ async def publish_profile(user, gifts):
 async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
-        "Ищет публичные объявления о Telegram-подарках. Показывает только явно указанный username продавца и цену в GRAM."
+        "Проверяет публичные Telegram-каналы и группы с объявлениями о подарках. "
+        "Публикует только подтверждённый в объявлении @username продавца и цену в GRAM. "
+        "Кошельки и TON-адреса не используются."
     )
 
 
@@ -163,18 +171,25 @@ async def scan_command(message: Message):
                 duplicates += 1
         stats = getattr(scanner, "last_stats", {})
         details = (
+            f"Каналов в списке: {stats.get('channels_total', 0)}\n"
             f"Проверено каналов: {stats.get('channels_checked', 0)}\n"
+            f"Недоступно каналов: {stats.get('channels_unavailable', 0)}\n"
             f"Проверено постов: {stats.get('posts_checked', 0)}\n"
             f"Постов о подарках: {stats.get('gift_posts', 0)}\n"
-            f"С username и ценой: {stats.get('with_username', 0)}\n"
-            f"Подходящих с ценой и владельцем: {count}\n"
+            f"Постов с контактом продавца: {stats.get('seller_contacts', 0)}\n"
+            f"Контактов с ценой в GRAM: {stats.get('with_username_and_price', 0)}\n"
+            f"Подходящих объявлений: {count}\n"
             f"Новых карточек в группе: {published}\n"
             f"Уже опубликовано ранее: {duplicates}"
         )
         await status.edit_text("✅ <b>Проверка завершена</b>\n\n" + details)
     except Exception as exc:
         log.exception("Manual /scan failed")
-        await status.edit_text("❌ <b>Ошибка сканирования</b>\\n<code>" + escape(str(exc))[:1200] + "</code>\\n\\nПодробности смотри в Render → Logs.")
+        await status.edit_text(
+            "❌ <b>Ошибка сканирования</b>\n<code>"
+            + escape(str(exc))[:1200]
+            + "</code>\n\nПодробности смотри в Render → Logs."
+        )
 
 
 @dp.message(Command("topics"))
@@ -192,7 +207,9 @@ async def topics_command(message: Message):
 @dp.message(Command("status"))
 async def status_command(message: Message):
     if scanner is not None:
-        await message.answer(f"🟢 Сканер публичных Telegram-объявлений подключён. Интервал: {SCAN_INTERVAL} сек.")
+        await message.answer(
+            f"🟢 Сканер публичных Telegram-объявлений подключён. Интервал: {SCAN_INTERVAL} сек."
+        )
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
 
@@ -228,14 +245,13 @@ async def log_callback(call: CallbackQuery):
         f"• {escape(str(x.get('scanned_at', '')))} — {escape(x.get('result') or '')}"
         for x in entries[:10]
     ) or "Пока нет событий"
-    wallet = f"Кошелёк: <code>{escape(profile.get('wallet_address') or '')}</code>\n" if profile.get("wallet_address") else ""
     answer = (
-        "📋 <b>Лог NFT</b>\n\n" + wallet
+        "📋 <b>Лог объявления</b>\n\n"
         + f"Username: @{escape(profile.get('username') or 'нет')}\n"
-        + f"NFT: {profile.get('gifts_count', 0)}\n"
+        + f"Подарков в объявлении: {profile.get('gifts_count', 0)}\n"
         + f"Цена: {profile.get('price') or 'неизвестна'} {escape(profile.get('price_currency') or '')}\n"
         + f"Занято: {escape(profile.get('reserved_username') or 'нет')}\n\n"
-        + f"<b>Объект:</b>\n{escape(profile.get('gift_summary') or 'нет данных')}\n\n"
+        + f"<b>Объявление:</b>\n{escape(profile.get('gift_summary') or 'нет данных')}\n\n"
         + f"<b>События:</b>\n{events}"
     )
     await call.message.answer(answer)
@@ -245,7 +261,7 @@ async def log_callback(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("no_contact:"))
 async def no_contact_callback(call: CallbackQuery):
     await call.answer(
-        "Публичный Telegram-контакт не найден. Адрес кошелька не позволяет написать владельцу в Telegram.",
+        "Публичный Telegram username продавца не найден в объявлении.",
         show_alert=True,
     )
 
@@ -258,7 +274,7 @@ async def scanner_loop():
                 scanner = ProfileScanner()
                 await scanner.start()
                 scanner_error = ""
-                log.info("Public Telegram gift-post scanner connected")
+                log.info("Public Telegram gift-ad scanner connected")
             async for user, gifts in scanner.scan_once():
                 await publish_profile(user, gifts)
         except asyncio.CancelledError:
