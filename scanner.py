@@ -1,76 +1,180 @@
 import asyncio
+import hashlib
 import logging
 import os
-from telethon import TelegramClient, functions, types
-from telethon.sessions import StringSession
+from types import SimpleNamespace
+
+import aiohttp
 
 log = logging.getLogger("profile-radar")
 
+API_BASE = os.getenv("TONCENTER_API_BASE", "https://toncenter.com/api/v3").rstrip("/")
+SCAN_LIMIT = max(10, min(int(os.getenv("SCAN_LIMIT", "100")), 500))
+REQUEST_INTERVAL = 1.15  # Anonymous TON Center requests are limited; stay below 1 RPS.
+
+
 class ProfileScanner:
+    """Scans publicly indexed TON NFT listings; no Telegram user session is required."""
+
     def __init__(self):
-        api_id = int(os.getenv("API_ID", "0"))
-        api_hash = os.getenv("API_HASH", "")
-        session = os.getenv("SESSION_STRING", "")
-        if not api_id or not api_hash or not session:
-            raise RuntimeError("Set API_ID, API_HASH and SESSION_STRING in Render environment")
-        self.client = TelegramClient(StringSession(session), api_id, api_hash)
+        self.session = None
+        self._last_request = 0.0
+        self.api_key = os.getenv("TONCENTER_API_KEY", "").strip()
 
     async def start(self):
-        await self.client.start()
+        timeout = aiohttp.ClientTimeout(total=25, connect=10)
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        self.session = aiohttp.ClientSession(timeout=timeout, headers=headers)
 
     async def stop(self):
-        await self.client.disconnect()
+        if self.session and not self.session.closed:
+            await self.session.close()
+        self.session = None
 
-    async def candidate_users(self):
-        seen = set()
-        source = os.getenv("SCAN_SOURCE_CHAT", "").strip()
-        if source:
-            try:
-                async for user in self.client.iter_participants(source):
-                    if getattr(user, "bot", False) or getattr(user, "deleted", False):
-                        continue
-                    if user.id not in seen:
-                        seen.add(user.id)
-                        yield user
-            except Exception:
-                log.exception("Cannot enumerate members of SCAN_SOURCE_CHAT")
-        raw = os.getenv("SCAN_USERS", "")
-        for item in [x.strip() for x in raw.split(",") if x.strip()]:
-            try:
-                user = await self.client.get_entity(item)
-                if user.id not in seen and not getattr(user, "bot", False):
-                    seen.add(user.id)
-                    yield user
-            except Exception:
-                log.warning("Cannot resolve scan target: %s", item)
+    async def _get(self, path, params=None):
+        if self.session is None:
+            raise RuntimeError("TON scanner is not started")
+        wait = REQUEST_INTERVAL - (asyncio.get_running_loop().time() - self._last_request)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        url = f"{API_BASE}{path}"
+        for attempt in range(4):
+            self._last_request = asyncio.get_running_loop().time()
+            async with self.session.get(url, params=params or {}) as response:
+                if response.status == 429:
+                    delay = min(2 ** (attempt + 1), 15)
+                    log.warning("TON Center rate limit; retrying in %s seconds", delay)
+                    await asyncio.sleep(delay)
+                    continue
+                response.raise_for_status()
+                payload = await response.json(content_type=None)
+                if isinstance(payload, dict) and payload.get("error"):
+                    raise RuntimeError(str(payload["error"]))
+                return payload
+        raise RuntimeError("TON Center rate limit: retry limit reached")
 
-    async def get_profile_gifts(self, user):
-        """Fetch gifts explicitly displayed/owned on a known Telegram peer profile."""
-        peer = await self.client.get_input_entity(user)
-        offset = ""
-        found = []
-        while True:
-            result = await self.client(functions.payments.GetSavedStarGiftsRequest(
-                peer=peer, offset=offset, limit=100
-            ))
-            for gift in getattr(result, "gifts", []):
-                item = getattr(gift, "gift", None)
-                # Only collectible NFT gifts, not ordinary unlimited Star Gifts.
-                if isinstance(item, types.StarGiftUnique):
-                    found.append(item)
-            next_offset = getattr(result, "next_offset", None)
-            if not next_offset:
-                break
-            offset = next_offset
-            await asyncio.sleep(0.25)
-        return found
+    @staticmethod
+    def _address(value):
+        if isinstance(value, dict):
+            return value.get("address") or value.get("user_friendly")
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _metadata(item, payload):
+        address = item.get("address")
+        metadata = (payload.get("metadata") or {}).get(address) or {}
+        token_info = metadata.get("token_info") or []
+        token = token_info[0] if token_info else {}
+        content = item.get("content") or {}
+        collection = item.get("collection") or {}
+        name = (
+            token.get("name")
+            or content.get("name")
+            or collection.get("name")
+            or "TON NFT"
+        )
+        collection_name = collection.get("name") or token.get("symbol") or ""
+        return str(name), str(collection_name)
+
+    @staticmethod
+    def _price_ton(sale):
+        # TON Center's full_price is expressed in nanotons (1 TON = 1e9 nanotons).
+        raw = sale.get("full_price")
+        details = sale.get("details") or {}
+        if raw is None and isinstance(details, dict):
+            raw = details.get("full_price") or details.get("price") or details.get("amount")
+        if isinstance(raw, dict):
+            raw = raw.get("amount") or raw.get("value")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        return value / 1_000_000_000
+
+    @staticmethod
+    def _category(price):
+        if price < 5:
+            return "under5"
+        if price < 15:
+            return "5_15"
+        if price < 27.5:
+            return "15_27_5"
+        if price < 60:
+            return "27_5_60"
+        return "over60"
+
+    @staticmethod
+    def _internal_id(address):
+        # Internal database key only. It is NOT a Telegram user ID.
+        number = int(hashlib.sha256(address.encode("utf-8")).hexdigest()[:15], 16)
+        return -(number or 1)
 
     async def scan_once(self):
-        async for user in self.candidate_users():
+        payload = await self._get(
+            "/nft/items",
+            {
+                "limit": SCAN_LIMIT,
+                "offset": 0,
+                "sort_by_last_transaction_lt": "true",
+            },
+        )
+        items = payload.get("nft_items") or []
+        log.info("TON index returned %s NFT items", len(items))
+
+        for item in items:
+            if not item.get("on_sale"):
+                continue
+            sale_address = self._address(item.get("sale_contract_address") or item.get("auction_contract_address"))
+            nft_address = self._address(item.get("address"))
+            if not sale_address or not nft_address:
+                continue
+
             try:
-                gifts = await self.get_profile_gifts(user)
-                if gifts:
-                    yield user, gifts
-            except Exception as exc:
-                log.warning("Gift scan failed for user_id=%s: %s", user.id, exc)
-            await asyncio.sleep(1.0)
+                sale_payload = await self._get("/nft/sales", {"address": sale_address})
+                sales = sale_payload.get("nft_sales") or []
+                if not sales:
+                    continue
+                sale = sales[0]
+                price = self._price_ton(sale)
+                if price is None:
+                    log.info("Skipping listing with unknown price: %s", nft_address)
+                    continue
+
+                nft_item = sale.get("nft_item") or item
+                owner = (
+                    self._address(sale.get("nft_owner_address"))
+                    or self._address(nft_item.get("owner_address"))
+                    or self._address(nft_item.get("real_owner"))
+                    or self._address(item.get("owner_address"))
+                    or self._address(item.get("real_owner"))
+                )
+                if not owner:
+                    continue
+
+                title, collection_name = self._metadata(item, payload)
+                gift = SimpleNamespace(
+                    title=title,
+                    address=nft_address,
+                    url=f"https://tonviewer.com/{nft_address}",
+                    collection_name=collection_name,
+                )
+                profile = SimpleNamespace(
+                    id=self._internal_id(nft_address),
+                    username=None,
+                    first_name="Владелец TON-кошелька",
+                    last_name="",
+                    wallet_address=owner,
+                    nft_address=nft_address,
+                    listing_url=f"https://tonviewer.com/{nft_address}",
+                    price_ton=price,
+                    category=self._category(price),
+                )
+                yield profile, [gift]
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Could not process TON NFT listing %s", nft_address)
