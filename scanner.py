@@ -166,24 +166,28 @@ class ProfileScanner:
 
     @staticmethod
     def _username(text, anchors, channel):
-        if not SELLER_CUE.search(text):
-            return None
+        # Accept only a handle explicitly written as the seller/contact,
+        # not arbitrary people mentioned in a channel announcement.
+        contact_pattern = re.compile(
+            r"(?:продавец|контакт|пишите|писать|связь|seller|contact|"
+            r"по вопросам|обращаться|для покупки|вопросы)\\s*"
+            r"(?:мне\\s*)?(?:[:：=—-]\\s*)?"
+            r"(?:в\\s+(?:личку|лс|личные сообщения)\\s*)?"
+            r"@([A-Za-z][A-Za-z0-9_]{4,31})",
+            re.I,
+        )
+        candidates = set(contact_pattern.findall(text))
 
-        candidates = set()
-        for cue in SELLER_CUE.finditer(text):
-            # A username must be close to an explicit seller/contact cue.
-            window = text[max(0, cue.start() - 110):min(len(text), cue.end() + 150)]
-            candidates.update(USERNAME_RE.findall(window))
-            candidates.update(TME_RE.findall(window))
-
-        # Also accept an explicit @handle hyperlink when the surrounding post
-        # clearly contains seller/contact wording.
+        # Accept t.me links only when the link label itself says it is
+        # the seller's contact. Ignore channel/profile links in the post.
         for anchor in anchors:
             label = anchor.get("text", "")
             href = anchor.get("href", "")
-            # Only treat a link as a seller contact when its visible label is
-            # an explicit contact action; ordinary gift/profile links are ignored.
-            if re.search(r"(написать продавцу|связаться|контакт продавца|seller contact)", label, re.I):
+            if re.search(
+                r"(написать продавцу|связаться с продавцом|контакт продавца|seller contact)",
+                label,
+                re.I,
+            ):
                 candidates.update(TME_RE.findall(href))
 
         candidates = {
