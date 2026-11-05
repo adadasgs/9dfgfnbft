@@ -237,10 +237,10 @@ class ProfileScanner:
         seen = set()
         seller_cue = re.compile(
             r"(?:seller|seller username|seller contact|contact seller|"
-            r"продавец|контакт продавца|написать продавцу)\\s*[:：=—-]?\\s*"
-            r"(?:<[^>]+>\\s*)?(?:https?://)?t\\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
+            r"продавец|контакт продавца|написать продавцу)\s*[:：=—-]?\s*"
+            r"(?:<[^>]+>\s*)?(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
             r"|(?:seller|seller username|seller contact|contact seller|"
-            r"продавец|контакт продавца|написать продавцу)\\s*[:：=—-]?\\s*"
+            r"продавец|контакт продавца|написать продавцу)\s*[:：=—-]?\s*"
             r"@([A-Za-z][A-Za-z0-9_]{4,31})",
             re.I,
         )
@@ -264,11 +264,11 @@ class ProfileScanner:
                     left = page[max(0, match.start()-1800):match.start()]
                     right = page[match.end():match.end()+900]
                     context = html.unescape(re.sub(r"<[^>]+>", " ", left + " " + right))
-                    context = re.sub(r"\\s+", " ", context).strip()
+                    context = re.sub(r"\s+", " ", context).strip()
                     if not gift_hint.search(context):
                         continue
                     listing_match = re.search(
-                        r'href=["\\']([^"\\']+)["\\']',
+                        r"""href=["']([^"']+)["']""",
                         page[max(0, match.start()-1200):match.start()],
                         re.I,
                     )
@@ -280,7 +280,7 @@ class ProfileScanner:
                     if key in seen:
                         continue
                     seen.add(key)
-                    internal_id = self._internal_id(source_name, str(abs(hash(key))))
+                    internal_id = self._internal_id(source_name, listing_url)
                     user = SimpleNamespace(
                         id=internal_id,
                         username=username,
