@@ -71,7 +71,7 @@ async def publish_profile(user, gifts):
     safe_name = escape(display_name)
     safe_username = escape(username) if username else None
     profile_url = f"https://t.me/{username}" if username else None
-    summary = "\\n".join(f"• {escape(gift_name(g))}" for g in gifts[:20])
+    summary = "\n".join(f"• {escape(gift_name(g))}" for g in gifts[:20])
 
     await db.save_profile({
         "user_id": user_id, "username": username, "display_name": display_name,
@@ -90,7 +90,7 @@ async def publish_profile(user, gifts):
         profile_line = f"👤 Продавец: {safe_name}"
     username_line = f"🔗 Username: @{safe_username}" if safe_username else "🔗 Username: не указан"
     text = (
-        "🎁 <b>Найдены NFT-подарки в профиле</b>\\n\\n"
+        "🎁 <b>Найдены NFT-подарки в профиле</b>\n\n"
         f"{profile_line}\\n"
         f"{username_line}\\n"
         f"🆔 Telegram ID: <code>{user_id}</code>\\n"
@@ -119,7 +119,7 @@ async def start(message: Message):
 @dp.message(Command("scan"))
 async def scan_command(message: Message):
     if scanner is None:
-        await message.answer("❌ Сканер не подключён.\\n\\nПричина: " + escape(scanner_error))
+        await message.answer("❌ Сканер не подключён.\n\nПричина: " + escape(scanner_error))
         return
     await message.answer("🔎 Запускаю проверку доступных профилей…")
     count = 0
@@ -136,7 +136,7 @@ async def topics_command(message: Message):
         saved = await db.get_forum_topics()
         lines = [f"• {title}: {saved.get(key, 'нет')}" for key, title in CATEGORIES]
         status = "Созданы темы: " + ", ".join(created) if created else "Все пять тем уже созданы."
-        await message.answer(status + "\\n\\n" + "\\n".join(lines))
+        await message.answer(status + "\n\n" + "\n".join(lines))
     except Exception as exc:
         log.exception("Forum topic setup failed")
         await message.answer("Не удалось создать темы. Дайте боту права администратора и право «Управление темами».\\nПричина: " + escape(str(exc)))
@@ -145,22 +145,24 @@ async def topics_command(message: Message):
 @dp.message(Command("status"))
 async def status_command(message: Message):
     if scanner is not None:
-        await message.answer("🟢 Сканер подключён.\\nИнтервал: " + str(SCAN_INTERVAL) + " сек.")
+        await message.answer("🟢 Сканер подключён.\nИнтервал: " + str(SCAN_INTERVAL) + " сек.")
     else:
-        await message.answer("🔴 Сканер не подключён.\\nПричина: " + escape(scanner_error))
+        await message.answer("🔴 Сканер не подключён.\nПричина: " + escape(scanner_error))
 
 
 @dp.callback_query(F.data.startswith("reserve:"))
 async def reserve_callback(call: CallbackQuery):
     user_id = int(call.data.split(":", 1)[1])
     who = call.from_user.username or str(call.from_user.id)
+    safe_who = escape(who)
     ok = await db.reserve_profile(user_id, call.from_user.id, who)
     if not ok:
         profile = await db.get_profile(user_id)
         await call.answer("Уже занято" + (f": @{profile['reserved_username']}" if profile and profile.get('reserved_username') else ""), show_alert=True)
         return
     profile = await db.get_profile(user_id)
-    text = (call.message.text or "") + f"\n\n🔒 Занял: @{who if call.from_user.username else who}"
+    await db.log_scan(user_id, profile.get("username") if profile else None, f"Занял профиль: {who} (Telegram ID {call.from_user.id})")
+    text = (call.message.text or "") + f"\n\n🔒 Занял: {safe_who}
     await call.message.edit_text(text, reply_markup=profile_keyboard(user_id, profile.get("username")), disable_web_page_preview=True)
     await call.answer("Профиль закреплён за вами")
 
@@ -174,6 +176,7 @@ async def log_callback(call: CallbackQuery):
         await call.answer("Запись не найдена", show_alert=True)
         return
     reserved = profile.get("reserved_username")
+    log_lines = [f"• {escape(x.get('scanned_at', ''))}: {escape(x.get('result') or 'Событие')}" for x in entries[:10]]
     text = (
         f"📋 <b>Лог профиля</b>\n\n"
         f"ID: <code>{user_id}</code>\n"
@@ -181,7 +184,7 @@ async def log_callback(call: CallbackQuery):
         f"NFT-подарков: {profile.get('gifts_count', 0)}\n"
         f"Занято: {'да, @' + reserved if reserved else 'нет'}\n\n"
         f"<b>Подарки:</b>\n{profile.get('gift_summary') or 'нет данных'}\n\n"
-        f"Записей сканирования: {len(entries)}"
+        f"<b>Последние события:</b>\n" + ("\n".join(log_lines) if log_lines else "Пока нет событий")
     )
     await call.message.answer(text)
     await call.answer()
