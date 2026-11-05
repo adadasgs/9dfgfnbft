@@ -18,6 +18,10 @@ WEBSITE_SOURCES = (
     ("Gifts.wtf", "https://gifts.wtf/"),
     ("TG Gifts", "https://tggifts.com/"),
     ("GiftChecker", "https://giftcheckertg.com/"),
+    ("Gift Browser", "https://browse.tg/"),
+    ("Peek", "https://peek.tg/"),
+    ("MarketApp", "https://marketapp.ws/"),
+    ("GiftsWatch", "https://giftswatchdata.com/"),
 )
 
 # Public web-index discovery. Queries target standalone marketplace/listing pages,
