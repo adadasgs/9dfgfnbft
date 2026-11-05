@@ -235,14 +235,13 @@ class ProfileScanner:
                         continue
                     self.last_stats["gift_posts"] += 1
                     username = self._username(text, anchors, post_channel)
-                    if not username:
-                        continue
-                    self.last_stats["seller_contacts"] += 1
+                    if username:
+                        self.last_stats["seller_contacts"] += 1
                     price = self._price(text)
-                    if price is None:
-                        continue
-                    self.last_stats["with_gram_price"] += 1
-                    self.last_stats["with_username_and_price"] += 1
+                    if price is not None:
+                        self.last_stats["with_gram_price"] += 1
+                        if username:
+                            self.last_stats["with_username_and_price"] += 1
 
                     post_url = f"https://t.me/{post_channel}/{post_id}"
                     gift = SimpleNamespace(
@@ -257,7 +256,7 @@ class ProfileScanner:
                         last_name="",
                         listing_url=post_url,
                         price_ton=price,  # legacy DB field; value is GRAM only
-                        category=self._category(price),
+                        category=self._category(price) if price is not None else "unpriced",
                         telegram_id=None,
                         source=f"t.me/{post_channel}",
                     )
