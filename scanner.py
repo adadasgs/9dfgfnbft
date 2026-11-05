@@ -35,20 +35,23 @@ SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "50")), 100))
 REQUEST_INTERVAL = 1.1
 
 GIFT_WORDS = re.compile(
-    r"(gift|подарок|подарки|nft|коллекционн|collectible|plush pepe|"
-    r"durov|dog|signet|lol pop|jack in the box|чашка|шапка|медвед|игрушк)",
+    r"(gift|gifts|for sale|selling|sell|подарок|подарки|продам|продаю|"
+    r"nft|коллекционн|collectible|plush pepe|durov|dog|signet|"
+    r"lol pop|jack in the box|чашка|шапка|медвед|игрушк|礼物|礼品|"
+    r"出售|出|卖|收藏品|礼物出售)",
     re.I,
 )
 SELLER_CUE = re.compile(
     r"(продавец|продавца|пишите|писать|контакт|связь|seller|contact|"
     r"\bdm\b|по вопросам|купить у|обращаться|для покупки|сделка|"
-    r"предложение|продам|продаю|продаётся|продается)",
+    r"предложение|продам|продаю|продаётся|продается|message me|"
+    r"dm me|contact me|seller's|wechat|联系|卖家|私聊|联系我|找我)",
     re.I,
 )
-RUSSIAN_TEXT_RE = re.compile(
-    r"[А-Яа-яЁё]{3,}|"
-    r"(продам|продаю|продаётся|продается|куплю|покупка|продавец|"
-    r"подарок|подарки|обмен|цена|рублей|руб\.?|связь|пишите)",
+SUPPORTED_LANGUAGE_RE = re.compile(r"[А-Яа-яЁё]{2,}|[A-Za-z]{3,}|[\u3400-\u9fff]{1,}")
+HIGH_RATING_RE = re.compile(
+    r"(?:rating|seller rating|рейтинг|信誉|信用分)\\s*[:：=]?\\s*(100|9[0-9]|8[0-9])"
+    r"(?:\\s*/\\s*100|\\s*%)?",
     re.I,
 )
 PRICE_RE = re.compile(
@@ -166,30 +169,27 @@ class ProfileScanner:
 
     @staticmethod
     def _username(text, anchors, channel):
-        # Accept only a handle explicitly written as the seller/contact,
-        # not arbitrary people mentioned in a channel announcement.
+        # Require an explicit seller/contact cue in Russian, English or Chinese.
         contact_pattern = re.compile(
             r"(?:продавец|контакт|пишите|писать|связь|seller|contact|"
-            r"по вопросам|обращаться|для покупки|вопросы)\\s*"
-            r"(?:мне\\s*)?(?:[:：=—-]\\s*)?"
-            r"(?:в\\s+(?:личку|лс|личные сообщения)\\s*)?"
-            r"@([A-Za-z][A-Za-z0-9_]{4,31})",
+            r"message me|dm me|contact me|по вопросам|обращаться|"
+            r"для покупки|вопросы|联系我|卖家|联系|私聊|找我)"
+            r"\s*(?:мне\s*)?(?:[:：=—-]\s*)?"
+            r"(?:в\s+(?:личку|лс|личные сообщения)\s*)?"
+            r"(?:me\s*)?@([A-Za-z][A-Za-z0-9_]{4,31})",
             re.I,
         )
         candidates = set(contact_pattern.findall(text))
-
-        # Accept t.me links only when the link label itself says it is
-        # the seller's contact. Ignore channel/profile links in the post.
         for anchor in anchors:
             label = anchor.get("text", "")
             href = anchor.get("href", "")
             if re.search(
-                r"(написать продавцу|связаться с продавцом|контакт продавца|seller contact)",
+                r"(написать продавцу|связаться с продавцом|контакт продавца|"
+                r"seller contact|contact seller|message seller|联系卖家|卖家联系)",
                 label,
                 re.I,
             ):
                 candidates.update(TME_RE.findall(href))
-
         candidates = {
             name for name in candidates
             if name.lower() != channel.lower()
@@ -197,6 +197,16 @@ class ProfileScanner:
             and not name.lower().endswith("_bot")
         }
         return next(iter(candidates)) if len(candidates) == 1 else None
+
+    @staticmethod
+    def _has_supported_language(text):
+        # Russian, English and Chinese are accepted; other scripts are not.
+        return bool(SUPPORTED_LANGUAGE_RE.search(text))
+
+    @staticmethod
+    def _has_high_rating(text):
+        match = HIGH_RATING_RE.search(text)
+        return bool(match and int(match.group(1)) >= 80)
 
     @staticmethod
     def _price(text):
@@ -237,6 +247,7 @@ class ProfileScanner:
             "seller_contacts": 0,
             "ignored_without_seller": 0,
             "ignored_non_russian": 0,
+            "ignored_high_rating": 0,
             "with_gram_price": 0,
             "with_username_and_price": 0,
         }
@@ -252,9 +263,13 @@ class ProfileScanner:
                     if not GIFT_WORDS.search(text):
                         continue
                     self.last_stats["gift_posts"] += 1
-                    # Russian-first mode: ignore listings without Russian-language text.
-                    if not RUSSIAN_TEXT_RE.search(text):
+                    # Accept Russian, English and Chinese gift listings.
+                    if not self._has_supported_language(text):
                         self.last_stats["ignored_non_russian"] += 1
+                        continue
+                    # Exclude only explicitly stated ratings of 80–100; never guess ratings.
+                    if self._has_high_rating(text):
+                        self.last_stats["ignored_high_rating"] += 1
                         continue
                     username = self._username(text, anchors, post_channel)
                     if username:
