@@ -100,7 +100,7 @@ async def publish_profile(user, gifts):
     old = await db.get_profile(user_id)
     if old and old.get("message_id"):
         await db.log_scan(user_id, username, "Повторная проверка NFT-листинга")
-        return
+        return False
 
     if wallet:
         seller = f"👛 Кошелёк владельца: <code>{escape(wallet)}</code>"
@@ -130,6 +130,7 @@ async def publish_profile(user, gifts):
     sent = await bot.send_message(**kwargs)
     await db.attach_message(user_id, DESTINATION_CHAT_ID, sent.message_id)
     await db.log_scan(user_id, username, f"Опубликован NFT; цена {price} TON")
+    return True
 
 
 @dp.message(CommandStart())
@@ -146,12 +147,31 @@ async def scan_command(message: Message):
     if scanner is None:
         await message.answer("❌ Сканер не подключён.\n" + escape(scanner_error))
         return
-    await message.answer("🔎 Проверяю публичные NFT-листинги TON…")
-    count = 0
-    async for user, gifts in scanner.scan_once():
-        await publish_profile(user, gifts)
-        count += 1
-    await message.answer(f"Готово. Обработано NFT-листингов: {count}.")
+    status = await message.answer("🔎 Проверяю публичные NFT-листинги TON…")
+    try:
+        count = 0
+        published = 0
+        duplicates = 0
+        async for user, gifts in scanner.scan_once():
+            count += 1
+            was_published = await publish_profile(user, gifts)
+            if was_published:
+                published += 1
+            else:
+                duplicates += 1
+        stats = getattr(scanner, "last_stats", {})
+        details = (
+            f"Получено NFT: {stats.get('items', '—')}\\n"
+            f"Помечено на продаже: {stats.get('on_sale', '—')}\\n"
+            f"Проверено объявлений: {stats.get('sales_checked', '—')}\\n"
+            f"Подходящих с ценой и владельцем: {count}\\n"
+            f"Новых карточек в группе: {published}\\n"
+            f"Уже опубликовано ранее: {duplicates}"
+        )
+        await status.edit_text("✅ <b>Проверка завершена</b>\\n\\n" + details)
+    except Exception as exc:
+        log.exception("Manual /scan failed")
+        await status.edit_text("❌ <b>Ошибка сканирования</b>\\n<code>" + escape(str(exc))[:1200] + "</code>\\n\\nПодробности смотри в Render → Logs.")
 
 
 @dp.message(Command("topics"))
