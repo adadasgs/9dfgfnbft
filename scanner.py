@@ -288,7 +288,7 @@ class ProfileScanner:
 
                     post_url = f"https://t.me/{post_channel}/{post_id}"
                     gift = SimpleNamespace(
-                        title=text[:500] or "Telegram gift",
+                        title="Публичное объявление о Telegram-подарке",
                         address=None,
                         url=post_url,
                     )
