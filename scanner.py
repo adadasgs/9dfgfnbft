@@ -252,14 +252,24 @@ class ProfileScanner:
         )
         gift_re = re.compile(r"(gift|gifts|подарок|подарки|collectible|nft)", re.I)
         seen = set()
+        self.last_stats.update({
+            "search_queries": 0,
+            "search_results": 0,
+            "gift_results": 0,
+            "seller_matches": 0,
+            "search_errors": 0,
+        })
         for query in WEB_SEARCH_QUERIES:
+            self.last_stats["search_queries"] += 1
             try:
                 url = "https://www.bing.com/search?format=rss&q=" + quote_plus(query)
                 raw = await self._get(url)
                 if not raw:
                     continue
                 root = ET.fromstring(raw)
-                for item in root.findall(".//item"):
+                items = root.findall(".//item")
+                self.last_stats["search_results"] += len(items)
+                for item in items:
                     title = item.findtext("title") or ""
                     description = item.findtext("description") or ""
                     link = item.findtext("link") or ""
@@ -274,11 +284,13 @@ class ProfileScanner:
                     snippet = html.unescape(re.sub(r"<[^>]+>", " ", title + " " + description))
                     if not gift_re.search(snippet):
                         continue
+                    self.last_stats["gift_results"] += 1
                     handles = {next((g for g in m.groups() if g), None) for m in seller_re.finditer(snippet)}
                     handles.discard(None)
                     if len(handles) != 1:
                         continue
                     username = next(iter(handles))
+                    self.last_stats["seller_matches"] += 1
                     if username.lower().endswith("_bot") or username.lower() in RESERVED_HANDLES:
                         continue
                     key = (username.lower(), link)
@@ -296,7 +308,8 @@ class ProfileScanner:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.debug("Public web search failed for %r: %s", query, exc)
+                self.last_stats["search_errors"] += 1
+                log.warning("Public web search failed for %r: %s", query, exc)
 
     async def scan_once(self):
         """Read public website pages only; no personal Telegram API/auth.
@@ -310,6 +323,11 @@ class ProfileScanner:
             "websites_unavailable": 0,
             "listing_pages_with_seller": 0,
             "profiles_with_verified_username": 0,
+            "search_queries": 0,
+            "search_results": 0,
+            "gift_results": 0,
+            "seller_matches": 0,
+            "search_errors": 0,
         }
         seen = set()
         seller_cue = re.compile(
