@@ -1,195 +1,162 @@
 import asyncio
 import hashlib
+import html
 import logging
 import os
+import re
+from html.parser import HTMLParser
 from types import SimpleNamespace
 
 import aiohttp
 
 log = logging.getLogger("profile-radar")
+DEFAULT_CHANNELS = "podarkitgnft,GiftTradeee,brankasgift,giftwhalefeed,GiftNotification,Gift_Alerts,GiftChanges,GiftChangesUpdates,TGcollectors,giftinsider,Gifted,GiftsMage,GiftChangesIDs,GiftChangesModels,GiftChangesAuctions,GiftNFTs,GIFT_PODARKI"
+CHANNELS = [x.strip().lstrip("@") for x in os.getenv("SCAN_CHANNELS", DEFAULT_CHANNELS).split(",") if x.strip()]
+SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "30")), 100))
+REQUEST_INTERVAL = 1.1
+GIFT_WORDS = re.compile(r"(gift|подарок|подарки|nft|коллекционн|collectible|plush pepe|durov|dog|signet|lol pop|jack in the box|чашка|шапка|медвед|игрушк)", re.I)
+SELLER_CUE = re.compile(r"(продавец|продавца|пишите|писать|контакт|связь|seller|contact|dm|telegram|телеграм|по вопросам|купить у|обращаться)", re.I)
+PRICE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:gram|grams|грам(?:м|ма|мов)?|гр\.?)(?!\w)", re.I)
+USERNAME_RE = re.compile(r"(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_]{4,31})")
+TME_RE = re.compile(r"https?://t\.me/([A-Za-z][A-Za-z0-9_]{4,31})(?:\?[^\s<]*)?", re.I)
 
-API_BASE = os.getenv("TONCENTER_API_BASE", "https://toncenter.com/api/v3").rstrip("/")
-SCAN_LIMIT = max(10, min(int(os.getenv("SCAN_LIMIT", "100")), 500))
-REQUEST_INTERVAL = 1.15  # Anonymous TON Center requests are limited; stay below 1 RPS.
+
+class TextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self.in_text = False
+
+    def handle_starttag(self, tag, attrs):
+        classes = dict(attrs).get("class", "").split()
+        if "tgme_widget_message_text" in classes:
+            self.in_text = True
+        elif self.in_text and tag == "br":
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag):
+        if tag == "div" and self.in_text:
+            self.in_text = False
+
+    def handle_data(self, data):
+        if self.in_text:
+            self.parts.append(data)
 
 
 class ProfileScanner:
-    """Scans publicly indexed TON NFT listings; no Telegram user session is required."""
+    """Scans public Telegram post previews; only explicit seller contacts are emitted."""
 
     def __init__(self):
         self.session = None
         self._last_request = 0.0
-        self.api_key = os.getenv("TONCENTER_API_KEY", "").strip()
         self.last_stats = {}
 
     async def start(self):
-        timeout = aiohttp.ClientTimeout(total=25, connect=10)
-        headers = {"Accept": "application/json"}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-        self.session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        timeout = aiohttp.ClientTimeout(total=20, connect=8)
+        self.session = aiohttp.ClientSession(timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; PublicGiftRadar/1.0)",
+            "Accept": "text/html,application/xhtml+xml",
+        })
 
     async def stop(self):
         if self.session and not self.session.closed:
             await self.session.close()
         self.session = None
 
-    async def _get(self, path, params=None):
+    async def _get(self, url):
         if self.session is None:
-            raise RuntimeError("TON scanner is not started")
-        wait = REQUEST_INTERVAL - (asyncio.get_running_loop().time() - self._last_request)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        url = f"{API_BASE}{path}"
-        for attempt in range(4):
-            self._last_request = asyncio.get_running_loop().time()
-            async with self.session.get(url, params=params or {}) as response:
-                if response.status == 429:
-                    delay = min(2 ** (attempt + 1), 15)
-                    log.warning("TON Center rate limit; retrying in %s seconds", delay)
-                    await asyncio.sleep(delay)
-                    continue
-                response.raise_for_status()
-                payload = await response.json(content_type=None)
-                if isinstance(payload, dict) and payload.get("error"):
-                    raise RuntimeError(str(payload["error"]))
-                return payload
-        raise RuntimeError("TON Center rate limit: retry limit reached")
+            raise RuntimeError("Public Telegram scanner is not started")
+        delay = REQUEST_INTERVAL - (asyncio.get_running_loop().time() - self._last_request)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        self._last_request = asyncio.get_running_loop().time()
+        async with self.session.get(url) as response:
+            if response.status in (403, 404, 429):
+                log.warning("Public preview unavailable: %s HTTP %s", url, response.status)
+                return ""
+            response.raise_for_status()
+            return await response.text()
 
     @staticmethod
-    def _address(value):
-        if isinstance(value, dict):
-            return value.get("address") or value.get("user_friendly")
-        return value if isinstance(value, str) else None
+    def _blocks(page):
+        starts = [m.start() for m in re.finditer(r'<div[^>]+class="[^"]*tgme_widget_message_wrap', page)]
+        for i, start in enumerate(starts):
+            block = page[start:starts[i + 1] if i + 1 < len(starts) else len(page)]
+            post = re.search(r'data-post="([A-Za-z0-9_]+)/([0-9]+)"', block)
+            body = re.search(r'<div[^>]+class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', block, re.S)
+            if post and body:
+                parser = TextExtractor()
+                parser.feed(body.group(1))
+                text = re.sub(r"\s+", " ", html.unescape(" ".join(parser.parts))).strip()
+                yield post.group(1), post.group(2), text, body.group(1)
 
     @staticmethod
-    def _metadata(item, payload):
-        address = item.get("address")
-        metadata = (payload.get("metadata") or {}).get(address) or {}
-        token_info = metadata.get("token_info") or []
-        token = token_info[0] if token_info else {}
-        content = item.get("content") or {}
-        collection = item.get("collection") or {}
-        name = (
-            token.get("name")
-            or content.get("name")
-            or collection.get("name")
-            or "TON NFT"
-        )
-        collection_name = collection.get("name") or token.get("symbol") or ""
-        return str(name), str(collection_name)
+    def _username(text, fragment, channel):
+        if not SELLER_CUE.search(text):
+            return None
+        names = set(USERNAME_RE.findall(text)) | set(TME_RE.findall(fragment))
+        names = {n for n in names if n.lower() != channel.lower() and n.lower() not in {"share", "proxy"}}
+        return next(iter(names)) if len(names) == 1 else None
 
     @staticmethod
-    def _price_ton(sale):
-        # TON Center's full_price is expressed in nanotons (1 TON = 1e9 nanotons).
-        raw = sale.get("full_price")
-        details = sale.get("details") or {}
-        if raw is None and isinstance(details, dict):
-            raw = details.get("full_price") or details.get("price") or details.get("amount")
-        if isinstance(raw, dict):
-            raw = raw.get("amount") or raw.get("value")
+    def _price(text):
+        m = PRICE_RE.search(text)
+        if not m:
+            return None
         try:
-            value = float(raw)
-        except (TypeError, ValueError):
+            p = float(m.group(1).replace(",", "."))
+            return p if p > 0 else None
+        except ValueError:
             return None
-        if value <= 0:
-            return None
-        return value / 1_000_000_000
 
     @staticmethod
     def _category(price):
-        if price < 5:
-            return "under5"
-        if price < 15:
-            return "5_15"
-        if price < 27.5:
-            return "15_27_5"
-        if price < 60:
-            return "27_5_60"
+        if price < 5: return "under5"
+        if price < 15: return "5_15"
+        if price < 27.5: return "15_27_5"
+        if price < 60: return "27_5_60"
         return "over60"
 
     @staticmethod
-    def _internal_id(address):
-        # Internal database key only. It is NOT a Telegram user ID.
-        number = int(hashlib.sha256(address.encode("utf-8")).hexdigest()[:15], 16)
-        return -(number or 1)
+    def _internal_id(channel, post_id):
+        # Local database key, never a Telegram account ID.
+        digest = hashlib.sha256(f"{channel}/{post_id}".encode()).hexdigest()[:15]
+        return -(int(digest, 16) or 1)
 
     async def scan_once(self):
-        # Keep useful counters even when the API request fails.
-        self.last_stats = {"items": 0, "on_sale": 0, "sales_checked": 0, "error": None}
-        payload = await self._get(
-            "/nft/items",
-            {
-                "limit": SCAN_LIMIT,
-                "offset": 0,
-                "sort_by_last_transaction_lt": "true",
-            },
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Unexpected TON Center response: {type(payload).__name__}")
-        items = payload.get("nft_items") or []
-        if not isinstance(items, list):
-            raise RuntimeError("TON Center response has no nft_items array")
-        self.last_stats["items"] = len(items)
-        log.info("TON index returned %s NFT items; response keys=%s", len(items), list(payload.keys()))
-
-        for item in items:
-            # API v3 item responses may omit the convenience on_sale flag.
-            # A sale/auction contract address is the reliable indication to inspect.
-            sale_info = item.get("sale") or item.get("auction") or {}
-            sale_address = self._address(
-                item.get("sale_contract_address")
-                or item.get("auction_contract_address")
-                or (sale_info.get("address") if isinstance(sale_info, dict) else None)
-            )
-            nft_address = self._address(item.get("address"))
-            if not sale_address or not nft_address:
-                continue
-            self.last_stats["on_sale"] += 1
-
+        self.last_stats = {"channels_checked": 0, "posts_checked": 0, "gift_posts": 0, "with_username": 0}
+        for channel in CHANNELS:
             try:
-                sale_payload = await self._get("/nft/sales", {"address": sale_address})
-                self.last_stats["sales_checked"] += 1
-                sales = sale_payload.get("nft_sales") or []
-                if not sales:
-                    continue
-                sale = sales[0]
-                price = self._price_ton(sale)
-                if price is None:
-                    log.info("Skipping listing with unknown price: %s", nft_address)
-                    continue
-
-                nft_item = sale.get("nft_item") or item
-                owner = (
-                    self._address(sale.get("nft_owner_address"))
-                    or self._address(nft_item.get("owner_address"))
-                    or self._address(nft_item.get("real_owner"))
-                    or self._address(item.get("owner_address"))
-                    or self._address(item.get("real_owner"))
-                )
-                if not owner:
-                    continue
-
-                title, collection_name = self._metadata(item, payload)
-                gift = SimpleNamespace(
-                    title=title,
-                    address=nft_address,
-                    url=f"https://tonviewer.com/{nft_address}",
-                    collection_name=collection_name,
-                )
-                profile = SimpleNamespace(
-                    id=self._internal_id(nft_address),
-                    username=None,
-                    first_name="Владелец TON-кошелька",
-                    last_name="",
-                    wallet_address=owner,
-                    nft_address=nft_address,
-                    listing_url=f"https://tonviewer.com/{nft_address}",
-                    price_ton=price,
-                    category=self._category(price),
-                )
-                yield profile, [gift]
+                page = await self._get(f"https://t.me/s/{channel}")
+                self.last_stats["channels_checked"] += 1
+                for post_channel, post_id, text, fragment in self._blocks(page):
+                    self.last_stats["posts_checked"] += 1
+                    if not GIFT_WORDS.search(text):
+                        continue
+                    self.last_stats["gift_posts"] += 1
+                    username = self._username(text, fragment, post_channel)
+                    price = self._price(text)
+                    if not username or price is None:
+                        continue
+                    self.last_stats["with_username"] += 1
+                    url = f"https://t.me/{post_channel}/{post_id}"
+                    gift = SimpleNamespace(title=text[:160] or "Telegram gift", address=None, url=url)
+                    profile = SimpleNamespace(
+                        id=self._internal_id(post_channel, post_id),
+                        username=username,
+                        first_name=f"Продавец @{username}",
+                        last_name="",
+                        wallet_address=None,
+                        nft_address=None,
+                        listing_url=url,
+                        price_ton=price,
+                        category=self._category(price),
+                        telegram_id=None,
+                        source=f"t.me/{post_channel}",
+                    )
+                    yield profile, [gift]
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("Could not process TON NFT listing %s", nft_address)
+                log.exception("Could not scan public channel @%s", channel)
+        log.info("Public Telegram scan stats: %s", self.last_stats)
