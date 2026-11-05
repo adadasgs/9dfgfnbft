@@ -219,6 +219,7 @@ class ProfileScanner:
             "posts_checked": 0,
             "gift_posts": 0,
             "seller_contacts": 0,
+            "ignored_without_seller": 0,
             "with_gram_price": 0,
             "with_username_and_price": 0,
         }
@@ -237,6 +238,10 @@ class ProfileScanner:
                     username = self._username(text, anchors, post_channel)
                     if username:
                         self.last_stats["seller_contacts"] += 1
+                    else:
+                        # Channel announcements without an identifiable seller are not seller profiles.
+                        self.last_stats["ignored_without_seller"] += 1
+                        continue
                     price = self._price(text)
                     if price is not None:
                         self.last_stats["with_gram_price"] += 1
