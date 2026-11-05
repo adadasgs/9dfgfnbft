@@ -35,22 +35,38 @@ scanner = None
 scanner_error = "Сканер ещё не запускался"
 
 
-async def ensure_forum_topics():
+async def ensure_forum_topics(create_missing=False):
+    # Telegram Bot API cannot list forum topics. Reuse IDs from Render env or SQLite.
+    # Never create topics during startup; only an explicit /topics command may do so.
     saved = await db.get_forum_topics()
+    env_ids = {
+        "under5": os.getenv("TOPIC_UNDER5_ID"),
+        "5_15": os.getenv("TOPIC_5_15_ID"),
+        "15_27_5": os.getenv("TOPIC_15_27_5_ID"),
+        "27_5_60": os.getenv("TOPIC_27_5_60_ID"),
+        "over60": os.getenv("TOPIC_OVER60_ID"),
+    }
+    resolved = {}
     for key, title in CATEGORIES:
-        if key not in saved:
-            topic = await bot.create_forum_topic(chat_id=DESTINATION_CHAT_ID, name=title)
-            await db.save_forum_topic(key, topic.message_thread_id)
-        else:
+        raw_id = env_ids.get(key)
+        thread_id = int(raw_id) if raw_id and raw_id.isdigit() else saved.get(key)
+        if thread_id:
             try:
-                await bot.edit_forum_topic(
-                    chat_id=DESTINATION_CHAT_ID,
-                    message_thread_id=saved[key],
-                    name=title,
-                )
+                await bot.edit_forum_topic(chat_id=DESTINATION_CHAT_ID, message_thread_id=thread_id, name=title)
+                resolved[key] = thread_id
+                if saved.get(key) != thread_id:
+                    await db.save_forum_topic(key, thread_id)
+                continue
             except Exception:
-                log.exception("Could not rename topic %s", title)
-
+                log.exception("Saved forum topic %s (%s) is unavailable", title, thread_id)
+                await db.delete_forum_topic(key)
+        if create_missing:
+            topic = await bot.create_forum_topic(chat_id=DESTINATION_CHAT_ID, name=title)
+            thread_id = topic.message_thread_id
+            await db.save_forum_topic(key, thread_id)
+            resolved[key] = thread_id
+            log.info("Created forum topic %s: %s", key, thread_id)
+    return resolved
 
 def profile_keyboard(user_id, username, listing_url=None):
     open_button = (
@@ -76,6 +92,9 @@ async def publish_profile(user, gifts):
     telegram_id = getattr(user, "telegram_id", None)
     source = getattr(user, "source", None)
     category = getattr(user, "category", "unpriced")
+    if category not in {key for key, _ in CATEGORIES}:
+        log.warning("Skipping listing with unsupported category: %s", category)
+        return False
     name = " ".join(
         x for x in [
             getattr(user, "first_name", None),
@@ -201,7 +220,7 @@ async def scan_command(message: Message):
 @dp.message(Command("topics"))
 async def topics_command(message: Message):
     try:
-        await ensure_forum_topics()
+        await ensure_forum_topics(create_missing=True)
         saved = await db.get_forum_topics()
         lines = [f"• {title}: {saved.get(key, 'нет')}" for key, title in CATEGORIES]
         await message.answer("Темы форума готовы.\n\n" + "\n".join(lines))
@@ -325,9 +344,9 @@ async def main():
         raise RuntimeError("DESTINATION_CHAT_ID is missing")
     await db.init_db()
     try:
-        await ensure_forum_topics()
+        await ensure_forum_topics(create_missing=False)
     except Exception:
-        log.exception("Forum topic setup failed")
+        log.exception("Forum topic restore failed")
     task = asyncio.create_task(scanner_loop())
     try:
         await dp.start_polling(bot)
