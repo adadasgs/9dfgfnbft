@@ -183,6 +183,7 @@ async def scan_command(message: Message):
             f"результатов поисковика {stats.get('search_results', 0)}, "
             f"страниц о подарках {stats.get('gift_results', 0)}.\n"
             f"👤 Совпадений с явно указанным продавцом: {stats.get('seller_matches', 0)}.\n"
+            f"📄 Страниц объявлений проверено: {stats.get('pages_inspected', 0)}.\n"
             f"⚠️ Ошибок поисковых запросов: {stats.get('search_errors', 0)}."
         )
     except Exception:
