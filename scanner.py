@@ -11,28 +11,10 @@ import aiohttp
 
 log = logging.getLogger("profile-radar")
 
-# Public Telegram gift-sale communities and announcement channels.
-# Only public posts are read; no private groups, user sessions, wallets or TON APIs.
-DEFAULT_CHANNELS = (
-    "trade_gifts_chat,giftsatellite,podarkirar_novostya_prodatcy,NFTGiftNewz,"
-    "GiftChangesUpdates,GiftChanges,Gift_Alerts,GiftNotification,GiftNFTs,"
-    "GiftTradeee,podarkitgnft,GIFT_PODARKI,Gifted,TGcollectors,giftinsider,"
-    "GiftsMage,GiftWhaleFeed,GiftChangesModels,GiftChangesAuctions,"
-    "GiftChangesIDs,gift_newstg,giftroad,indigoGif,brankasgift,"
-    "project_crystal,nexikj,DosikGIFTS,agentdurovaton,getSendGifts,reystqq,"
-    "chaoblog,gifttradeservise,projectx_nft,cryptoblog,hikoded,whisper_in_the_night,"
-    "cryptaad,benzin,CreepyGifts,alishka_gifts,snyalcepik,semenchuk,groza,"
-    "loxssy52,ohuenko,PodarokDurova,bape,vices,borov_club,lalyounft,bafet,"
-    "DuckLodge,nonstopiiiikk,durovgoyda,mr_tony,digest,roxtalk,zorgannft,"
-    "dadyacrypto,nft13onton,directorpodarkov,"
-    "GiftTradeee,TonnelGift,mrktnotification,giftsmarket_starsgram,"
-    "GiftPawn,nft_gifts_chat,vseznayka_otc,mutant_gifts,mutantgifts_chat,peektg"
+# Website-only sources. Telegram channel scraping is intentionally disabled.
+WEBSITE_SOURCES = (
+    ("GiftChecker", "https://giftcheckertg.com/"),
 )
-CHANNELS = [
-    x.strip().lstrip("@")
-    for x in os.getenv("SCAN_CHANNELS", DEFAULT_CHANNELS).split(",")
-    if x.strip()
-]
 SCAN_LIMIT = max(5, min(int(os.getenv("SCAN_LIMIT", "50")), 100))
 REQUEST_INTERVAL = 1.1
 
@@ -240,59 +222,81 @@ class ProfileScanner:
         return -(int(digest, 16) or 1)
 
     async def scan_once(self):
-        """Scan public gift-sale feeds and public Telegram previews.
+        """Read website pages only; never scan Telegram channels.
 
-        Emit only when the post explicitly labels a Telegram contact as seller.
-        Random mentions, channel names and bot accounts are rejected.
+        A seller is accepted only when a listing page explicitly labels the
+        username as its seller/contact. General @mentions and site support
+        accounts are ignored.
         """
         self.last_stats = {
-            "public_sources_checked": 0,
-            "public_sources_unavailable": 0,
-            "channels_scanned": 0,
-            "posts_checked": 0,
-            "gift_posts": 0,
-            "posts_with_contact": 0,
+            "websites_checked": 0,
+            "websites_unavailable": 0,
+            "listing_pages_with_seller": 0,
             "profiles_with_verified_username": 0,
         }
         seen = set()
-        for channel in CHANNELS:
-            self.last_stats["public_sources_checked"] += 1
+        seller_cue = re.compile(
+            r"(?:seller|seller username|seller contact|contact seller|"
+            r"продавец|контакт продавца|написать продавцу)\\s*[:：=—-]?\\s*"
+            r"(?:<[^>]+>\\s*)?(?:https?://)?t\\.me/([A-Za-z][A-Za-z0-9_]{4,31})"
+            r"|(?:seller|seller username|seller contact|contact seller|"
+            r"продавец|контакт продавца|написать продавцу)\\s*[:：=—-]?\\s*"
+            r"@([A-Za-z][A-Za-z0-9_]{4,31})",
+            re.I,
+        )
+        gift_hint = re.compile(
+            r"(gift|gifts|telegram gift|подарок|подарки|collectible|nft)",
+            re.I,
+        )
+        for source_name, base_url in WEBSITE_SOURCES:
+            self.last_stats["websites_checked"] += 1
             try:
-                page = await self._get(f"https://t.me/s/{channel}")
+                page = await self._get(base_url)
                 if not page:
-                    self.last_stats["public_sources_unavailable"] += 1
+                    self.last_stats["websites_unavailable"] += 1
                     continue
-                self.last_stats["channels_scanned"] += 1
-                for post_channel, post_id, text, anchors in self._blocks(page):
-                    self.last_stats["posts_checked"] += 1
-                    if not GIFT_WORDS.search(text):
+                # Parse only server-rendered listing fragments. If the site
+                # requires a browser session/JS API, do not invent records.
+                for match in seller_cue.finditer(page):
+                    username = next((x for x in match.groups() if x), None)
+                    if not username or username.lower().endswith("_bot"):
                         continue
-                    self.last_stats["gift_posts"] += 1
-                    username = self._username(text, anchors, post_channel)
-                    if not username:
+                    left = page[max(0, match.start()-1800):match.start()]
+                    right = page[match.end():match.end()+900]
+                    context = html.unescape(re.sub(r"<[^>]+>", " ", left + " " + right))
+                    context = re.sub(r"\\s+", " ", context).strip()
+                    if not gift_hint.search(context):
                         continue
-                    self.last_stats["posts_with_contact"] += 1
-                    key = (post_channel.lower(), post_id, username.lower())
+                    listing_match = re.search(
+                        r'href=["\\']([^"\\']+)["\\']',
+                        page[max(0, match.start()-1200):match.start()],
+                        re.I,
+                    )
+                    listing_url = base_url
+                    if listing_match:
+                        from urllib.parse import urljoin
+                        listing_url = urljoin(base_url, html.unescape(listing_match.group(1)))
+                    key = (source_name.lower(), username.lower(), listing_url)
                     if key in seen:
                         continue
                     seen.add(key)
-                    price = self._price(text)
-                    listing_url = f"https://t.me/{post_channel}/{post_id}"
+                    internal_id = self._internal_id(source_name, str(abs(hash(key))))
                     user = SimpleNamespace(
-                        id=self._internal_id(post_channel, post_id),
+                        id=internal_id,
                         username=username,
                         first_name=None,
                         last_name=None,
                         telegram_id=None,
-                        price_ton=price,
-                        source=f"Telegram public post: @{post_channel}",
+                        price_ton=self._price(context),
+                        source=None,
                         listing_url=listing_url,
                     )
-                    gift = SimpleNamespace(title=text[:180] or "Telegram gift listing", url=listing_url)
+                    gift = SimpleNamespace(title=context[:180] or "Telegram gift listing", url=listing_url)
+                    self.last_stats["listing_pages_with_seller"] += 1
                     self.last_stats["profiles_with_verified_username"] += 1
                     yield user, [gift]
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.last_stats["public_sources_unavailable"] += 1
-                log.warning("Source @%s scan failed: %s", channel, exc)
+                self.last_stats["websites_unavailable"] += 1
+                log.warning("Website scan failed (%s): %s", source_name, exc)
