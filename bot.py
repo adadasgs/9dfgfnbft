@@ -170,36 +170,22 @@ async def scan_command(message: Message):
     if scanner is None:
         await message.answer("❌ Сканер не подключён.\n" + escape(scanner_error))
         return
-    status = await message.answer("🔎 Проверяю подтверждённые сайты с объявлениями и username продавцов…")
+    status = await message.answer("🔎 Сканирование запущено. Найденные объявления отправлю в группу.")
     try:
-        count = 0
         published = 0
         duplicates = 0
         async for user, gifts in scanner.scan_once():
-            count += 1
             was_published = await publish_profile(user, gifts)
             if was_published:
                 published += 1
             else:
                 duplicates += 1
-        stats = getattr(scanner, "last_stats", {})
-        details = (
-            f"Источники-сайты проверены: {stats.get('website_sources_checked', 0)}\n"
-            f"Недоступно источников: {stats.get('website_sources_unavailable', 0)}\n"
-            f"Подтверждённых username продавцов: {stats.get('profiles_with_verified_username', 0)}\n"
-            f"Сканирование каналов: отключено\n"
-            f"Новых карточек: {published}\n"
-            f"Повторных карточек: {duplicates}\n\n"
-            f"Причина: {escape(stats.get('reason', 'нет данных'))}"
-        )
-        await status.edit_text("✅ <b>Проверка завершена</b>\n\n" + details)
-    except Exception as exc:
-        log.exception("Manual /scan failed")
         await status.edit_text(
-            "❌ <b>Ошибка сканирования</b>\n<code>"
-            + escape(str(exc))[:1200]
-            + "</code>\n\nПодробности смотри в Render → Logs."
+            f"✅ Готово. Новых карточек в группе: {published}. Повторов: {duplicates}."
         )
+    except Exception:
+        log.exception("Manual /scan failed")
+        await status.edit_text("❌ Ошибка сканирования. Подробности сохранены в Render Logs.")
 
 
 @dp.message(Command("topics"))
@@ -235,7 +221,7 @@ async def sources_command(message: Message):
 async def status_command(message: Message):
     if scanner is not None:
         await message.answer(
-            "🟡 Сканирование каналов отключено. Автопубликация с сайтов включается только после подтверждения открытого источника с username продавца."
+            "🟢 Сканер активен. Проверяет публичные объявления и публикует только посты с явно указанным username продавца."
         )
     else:
         await message.answer("🔴 Сканер не подключён.\n" + escape(scanner_error))
