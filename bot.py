@@ -59,6 +59,10 @@ def profile_keyboard(user_id, username):
     ]]
     if username:
         rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", url=f"https://t.me/{username}")])
+        rows.append([
+            InlineKeyboardButton(text="🔎 ChatCrawler", url="https://chatcrawler.app/"),
+            InlineKeyboardButton(text="🎁 Gift Explore", url="https://t.me/GiftExploreBot"),
+        ])
     else:
         rows.append([InlineKeyboardButton(text="✉️ Написать продавцу", callback_data=f"no_contact:{user_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -147,7 +151,8 @@ async def start(message: Message):
     await message.answer(
         "<b>NFT Profile Radar</b>\n\n"
         "Проверяет публичные Telegram-каналы и группы с объявлениями о подарках. "
-        "Публикует только подтверждённый в объявлении @username продавца и цену в GRAM. "
+        "Публикует только подтверждённый в объявлении @username и цену в GRAM. "
+        "Для дополнительной ручной проверки доступны ChatCrawler и Gift Explore. "
         "Кошельки и TON-адреса не используются."
     )
 
@@ -202,6 +207,22 @@ async def topics_command(message: Message):
     except Exception as exc:
         log.exception("Topic setup failed")
         await message.answer("Ошибка создания тем: " + escape(str(exc)))
+
+
+@dp.message(Command("sources"))
+async def sources_command(message: Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔎 ChatCrawler — поиск профилей", url="https://chatcrawler.app/")],
+        [InlineKeyboardButton(text="🎁 Gift Explore — поиск подарков", url="https://t.me/GiftExploreBot")],
+    ])
+    await message.answer(
+        "<b>Источники дополнительной проверки</b>\n\n"
+        "• ChatCrawler — бесплатный поиск публичных Telegram-профилей по username или ID.\n"
+        "• Gift Explore — поиск подарков и аналитика; бесплатные запросы ограничены.\n\n"
+        "Эти ссылки открывают сервисы отдельно. Автоматическое чтение их ответов "
+        "не подключено, поскольку публичного API для такого доступа нет.",
+        reply_markup=keyboard,
+    )
 
 
 @dp.message(Command("status"))
